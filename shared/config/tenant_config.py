@@ -2,6 +2,9 @@
 
 Per-tenant config with shadow mode defaults. New tenants always start
 in shadow mode and cannot transition to live without explicit sign-off.
+
+NFR-SCL-003: Per-tenant monthly spend caps resolved via ``spend_tier`` and
+the optional ``monthly_spend_cap`` override.
 """
 
 from __future__ import annotations
@@ -10,6 +13,9 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+# Imported here so callers can resolve caps without importing spend_guard
+from context_gateway.spend_guard import TENANT_MONTHLY_CAPS
+
 
 @dataclass
 class TenantConfig:
@@ -17,6 +23,12 @@ class TenantConfig:
 
     New tenants default to ``shadow_mode=True``.  Shadow mode cannot be
     disabled without ``go_live_signed_off=True``.
+
+    spend_tier:
+        Controls the default monthly LLM spend cap.  Valid values are
+        ``"premium"`` ($500), ``"standard"`` ($100), and ``"trial"`` ($20).
+    monthly_spend_cap:
+        When set, overrides the tier default with an exact USD value.
     """
 
     tenant_id: str
@@ -26,6 +38,9 @@ class TenantConfig:
     go_live_signed_off_by: str = ""
     go_live_date: str = ""
     approval_timeout_overrides: dict[str, int] = field(default_factory=dict)
+    # NFR-SCL-003 spend cap fields
+    spend_tier: str = "standard"
+    monthly_spend_cap: float | None = None
 
     def disable_shadow(self) -> None:
         """Disable shadow mode — requires prior go-live sign-off."""
@@ -34,6 +49,16 @@ class TenantConfig:
                 "Cannot disable shadow mode without go_live_signed_off=True"
             )
         self.shadow_mode = False
+
+    def get_effective_monthly_cap(self) -> float:
+        """Return the monthly LLM spend cap (USD) for this tenant.
+
+        Uses ``monthly_spend_cap`` when explicitly set; otherwise falls back to
+        the tier default from :data:`TENANT_MONTHLY_CAPS`.
+        """
+        if self.monthly_spend_cap is not None:
+            return self.monthly_spend_cap
+        return TENANT_MONTHLY_CAPS.get(self.spend_tier, TENANT_MONTHLY_CAPS["standard"])
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -44,6 +69,8 @@ class TenantConfig:
             "go_live_signed_off_by": self.go_live_signed_off_by,
             "go_live_date": self.go_live_date,
             "approval_timeout_overrides": self.approval_timeout_overrides,
+            "spend_tier": self.spend_tier,
+            "monthly_spend_cap": self.monthly_spend_cap,
         }
 
     @classmethod
@@ -56,6 +83,8 @@ class TenantConfig:
             go_live_signed_off_by=data.get("go_live_signed_off_by", ""),
             go_live_date=data.get("go_live_date", ""),
             approval_timeout_overrides=data.get("approval_timeout_overrides", {}),
+            spend_tier=data.get("spend_tier", "standard"),
+            monthly_spend_cap=data.get("monthly_spend_cap"),
         )
 
 

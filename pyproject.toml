@@ -29,7 +29,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["shared*", "infra*", "entity_parser*", "sentinel_adapter*", "elastic_adapter*", "splunk_adapter*", "context_gateway*", "llm_router*", "orchestrator*", "ctem_normaliser*", "atlas_detection*", "batch_scheduler*", "ops*", "services*"]
+include = ["shared*", "infra*", "entity_parser*", "sentinel_adapter*", "elastic_adapter*", "splunk_adapter*", "context_gateway*", "llm_router*", "orchestrator*", "ctem_normaliser*", "atlas_detection*", "batch_scheduler*", "ops*", "services*", "wiz_connector*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

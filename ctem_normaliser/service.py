@@ -6,17 +6,20 @@ normaliser, upserts to Postgres, and publishes to ctem.normalized.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
 
+from ctem_normaliser.asset_discovery import AssetDiscoveryScheduler
 from ctem_normaliser.base import BaseNormaliser
 from ctem_normaliser.models import CTEMExposure
 from ctem_normaliser.upsert import CTEMRepository
-from ctem_normaliser.wiz import WizNormaliser
-from ctem_normaliser.snyk import SnykNormaliser
-from ctem_normaliser.garak import GarakNormaliser
 from ctem_normaliser.art import ARTNormaliser
+from ctem_normaliser.burp import BurpNormaliser
+from ctem_normaliser.garak import GarakNormaliser
+from ctem_normaliser.snyk import SnykNormaliser
+from ctem_normaliser.wiz import WizNormaliser
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +29,7 @@ TOPIC_NORMALISER_MAP: dict[str, type[BaseNormaliser]] = {
     "ctem.raw.snyk": SnykNormaliser,
     "ctem.raw.garak": GarakNormaliser,
     "ctem.raw.art": ARTNormaliser,
+    "ctem.raw.burp": BurpNormaliser,
 }
 
 NORMALISED_TOPIC = "ctem.normalized"
@@ -51,6 +55,8 @@ class CTEMNormaliserService:
         kafka_producer: Any | None = None,
         neo4j_client: Any | None = None,
         audit_producer: Any | None = None,
+        pg_pool: Any | None = None,
+        redis_client: Any | None = None,
     ) -> None:
         self._repo = repository
         self._consumer = kafka_consumer
@@ -59,6 +65,13 @@ class CTEMNormaliserService:
         self._audit = audit_producer
         self._normalisers: dict[str, BaseNormaliser] = {}
         self._init_normalisers()
+        self._discovery_scheduler: AssetDiscoveryScheduler | None = None
+        if pg_pool is not None and kafka_producer is not None:
+            self._discovery_scheduler = AssetDiscoveryScheduler(
+                pg_pool=pg_pool,
+                kafka_producer=kafka_producer,
+                redis_client=redis_client,
+            )
 
     def _init_normalisers(self) -> None:
         """Instantiate normalisers with optional dependencies."""
@@ -67,7 +80,24 @@ class CTEMNormaliserService:
             "ctem.raw.snyk": SnykNormaliser(),
             "ctem.raw.garak": GarakNormaliser(),
             "ctem.raw.art": ARTNormaliser(),
+            "ctem.raw.burp": BurpNormaliser(),
         }
+
+    async def start_background_tasks(self) -> list[asyncio.Task]:  # type: ignore[type-arg]
+        """Start long-running background tasks (e.g. asset discovery scheduler).
+
+        Returns the list of created :class:`asyncio.Task` objects so the caller
+        can cancel them on shutdown.
+        """
+        tasks: list[asyncio.Task] = []  # type: ignore[type-arg]
+        if self._discovery_scheduler is not None:
+            task = asyncio.create_task(
+                self._discovery_scheduler.run_forever(),
+                name="ctem-asset-discovery",
+            )
+            tasks.append(task)
+            logger.info("Asset discovery scheduler background task started")
+        return tasks
 
     def get_normaliser(self, topic: str) -> BaseNormaliser | None:
         """Get the normaliser for a given topic."""
@@ -208,10 +238,28 @@ class CTEMConsumerRunner:
 
     async def run(self) -> None:
         """Async consumer loop."""
+        import asyncio as _asyncio
         from confluent_kafka import KafkaError
 
         self.start()
+
+        # Start background tasks (asset discovery scheduler, etc.)
+        bg_tasks = await self._service.start_background_tasks()
         logger.info("CTEM normaliser service running")
+
+        try:
+            await self._run_consumer_loop()
+        finally:
+            for task in bg_tasks:
+                task.cancel()
+                try:
+                    await task
+                except _asyncio.CancelledError:
+                    pass
+
+    async def _run_consumer_loop(self) -> None:
+        """Inner consumer poll loop."""
+        from confluent_kafka import KafkaError
 
         while self._running:
             msg = self._consumer.poll(timeout=1.0)

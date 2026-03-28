@@ -75,6 +75,7 @@ async def lifespan(application: FastAPI):
         try:
             from shared.db.postgres import PostgresClient
             db = PostgresClient(dsn=postgres_dsn)
+            await db.connect()
             known_ids = await db.get_technique_ids()
             taxonomy_version = await db.get_taxonomy_version()
             logger.info(

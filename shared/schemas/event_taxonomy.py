@@ -59,13 +59,17 @@ class EventTaxonomy(str, Enum):
     FP_PATTERN_REVOKED = "fp_pattern.revoked"
     SHADOW_GO_LIVE_APPROVED = "shadow.go_live_approved"
 
-    # Security events (6)
+    # Security events (8)
     INJECTION_DETECTED = "injection.detected"
     INJECTION_QUARANTINED = "injection.quarantined"
     TECHNIQUE_QUARANTINED = "technique.quarantined"
     ACCUMULATION_THRESHOLD_BREACHED = "accumulation.threshold_breached"
     SPEND_SOFT_LIMIT = "spend.soft_limit"
     SPEND_HARD_LIMIT = "spend.hard_limit"
+    # FR-ATL-006: Safety guard — FP attempt blocked on safety-critical alert
+    FP_SAFETY_BLOCK = "fp.safety_block"
+    # FR-CSM-004: Analyst feedback on investigation outcome
+    ANALYST_FEEDBACK_SUBMITTED = "analyst.feedback.submitted"
 
     # Canary / shadow events (3)
     CANARY_PROMOTED = "canary.promoted"
@@ -125,6 +129,8 @@ EVENT_CATEGORY_MAP: dict[EventTaxonomy, EventCategory] = {
     EventTaxonomy.ACCUMULATION_THRESHOLD_BREACHED: EventCategory.SECURITY,
     EventTaxonomy.SPEND_SOFT_LIMIT: EventCategory.SECURITY,
     EventTaxonomy.SPEND_HARD_LIMIT: EventCategory.SECURITY,
+    EventTaxonomy.FP_SAFETY_BLOCK: EventCategory.SECURITY,
+    EventTaxonomy.ANALYST_FEEDBACK_SUBMITTED: EventCategory.ACTION,
     # Canary / shadow events
     EventTaxonomy.CANARY_PROMOTED: EventCategory.DECISION,
     EventTaxonomy.CANARY_ROLLED_BACK: EventCategory.DECISION,

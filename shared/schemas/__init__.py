@@ -3,6 +3,7 @@
 from shared.schemas.alert import CanonicalAlert, SeverityLevel
 from shared.schemas.entity import AlertEntities, EntityType, NormalizedEntity
 from shared.schemas.investigation import AgentRole, GraphState, InvestigationState
+from shared.schemas.org_context import AssetType, OrgContextEntry
 from shared.schemas.risk import RiskSignal, RiskState, classify_risk
 from shared.schemas.scoring import (
     ALPHA,
@@ -22,12 +23,14 @@ __all__ = [
     "LAMBDA",
     "AgentRole",
     "AlertEntities",
+    "AssetType",
     "CanonicalAlert",
     "EntityType",
     "GraphState",
     "IncidentScore",
     "InvestigationState",
     "NormalizedEntity",
+    "OrgContextEntry",
     "RiskSignal",
     "RiskState",
     "SeverityLevel",

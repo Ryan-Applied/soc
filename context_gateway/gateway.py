@@ -43,6 +43,7 @@ class GatewayRequest:
     user_content: str
     output_schema: Optional[dict[str, Any]] = None
     tenant_id: str = "default"
+    use_extended_thinking: bool = False
 
 
 @dataclass
@@ -151,6 +152,7 @@ class ContextGateway:
         response_text, metrics = await self.client.complete(
             system=system_blocks,
             messages=messages,
+            use_extended_thinking=request.use_extended_thinking,
         )
 
         # 7 — output validation

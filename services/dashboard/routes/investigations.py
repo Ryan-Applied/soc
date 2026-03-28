@@ -128,4 +128,47 @@ async def api_investigations(
     except Exception:
         investigations = []
 
+    # FR-CSM-004: Annotate each investigation with its feedback URL so that
+    # clients can surface the feedback form without constructing URLs manually.
+    for inv in investigations:
+        inv_id = inv.get("investigation_id", "")
+        inv["feedback_url"] = f"/api/investigations/{inv_id}/feedback"
+
     return {"investigations": investigations, "count": len(investigations)}
+
+
+@router.get("/api/investigations/{investigation_id}")
+async def api_investigation_detail(investigation_id: str) -> dict[str, Any]:
+    """Return full investigation detail as JSON, including the feedback URL.
+
+    FR-CSM-004: The ``feedback_url`` field points to the POST endpoint where
+    analysts can submit structured feedback on this investigation's outcome.
+    """
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        row = await db.fetch_one(
+            """
+            SELECT investigation_id, alert_id, tenant_id, state,
+                   graph_state->>'severity' AS severity,
+                   graph_state->>'classification' AS classification,
+                   graph_state AS graph_state_json,
+                   updated_at
+            FROM investigation_state
+            WHERE investigation_id = $1
+            """,
+            investigation_id,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Investigation not found")
+
+    detail = dict(row)
+    # FR-CSM-004: Include the feedback URL so UIs/clients can link directly
+    # to the feedback submission endpoint without constructing it themselves.
+    detail["feedback_url"] = f"/api/investigations/{investigation_id}/feedback"
+    return detail

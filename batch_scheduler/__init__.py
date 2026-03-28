@@ -5,6 +5,7 @@ from batch_scheduler.client import AluskortBatchClient
 from batch_scheduler.scheduler import BatchScheduler
 from batch_scheduler.processor import BatchResultProcessor
 from batch_scheduler.fp_generator import FPPatternGenerator
+from batch_scheduler.org_context_indexer import OrgContextIndexer
 
 __all__ = [
     "AluskortBatchClient",
@@ -14,5 +15,6 @@ __all__ = [
     "BatchTask",
     "FPPattern",
     "FPPatternGenerator",
+    "OrgContextIndexer",
     "PlaybookDraft",
 ]

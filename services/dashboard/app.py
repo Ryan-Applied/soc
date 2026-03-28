@@ -114,6 +114,7 @@ from services.dashboard.routes.batch_jobs import router as batch_jobs_router  # 
 from services.dashboard.routes.users import router as users_router  # noqa: E402
 from services.dashboard.routes.llm_health import router as llm_health_router  # noqa: E402
 from services.dashboard.routes.ciso import router as ciso_router  # noqa: E402
+from services.dashboard.routes.feedback import router as feedback_router  # noqa: E402
 from services.dashboard.middleware.auth import RBACMiddleware  # noqa: E402
 from services.dashboard.ws import websocket_investigations  # noqa: E402
 
@@ -142,6 +143,7 @@ app.include_router(batch_jobs_router)
 app.include_router(users_router)
 app.include_router(llm_health_router)
 app.include_router(ciso_router)
+app.include_router(feedback_router)
 
 
 # ------------------------------------------------------------------

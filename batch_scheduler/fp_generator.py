@@ -70,12 +70,24 @@ class FPPatternGenerator:
         now = now or datetime.now(timezone.utc)
         start = now - self._lookback
 
+        # FR-ATL-006 Safety constraint: exclude investigations whose linked
+        # ATLAS detection is safety_relevant=TRUE.  Such detections must never
+        # be suppressed as false positives — joining against atlas_detections
+        # and filtering at the SQL layer guarantees the LLM batch job never
+        # receives them, providing defence-in-depth alongside the HTTP-layer
+        # guard in ATLASSafetyGuard.validate_fp_candidate().
         rows = await self._db.fetch_many(
             """
-            SELECT investigation_id, alert_id, graphstate_json, decision_chain
-            FROM investigations
-            WHERE state = 'closed'
-              AND updated_at >= $1 AND updated_at < $2
+            SELECT i.investigation_id, i.alert_id, i.graphstate_json, i.decision_chain
+            FROM investigations i
+            WHERE i.state = 'closed'
+              AND i.updated_at >= $1 AND i.updated_at < $2
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM atlas_detections ad
+                  WHERE ad.investigation_id = i.investigation_id
+                    AND ad.safety_relevant = TRUE
+              )
             """,
             start, now,
         )

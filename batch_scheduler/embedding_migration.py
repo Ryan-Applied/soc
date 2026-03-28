@@ -1,7 +1,11 @@
-"""Embedding model migration job — Story 14.6.
+"""Embedding model migration job — Story 14.6 / FR-RAG-004.
 
 4-phase migration: dual-write → backfill → verify → cleanup.
 Supports checkpoint/resume, idempotent re-runs, and rate limiting.
+
+FR-RAG-004: ``chunk_and_embed_ti_reports`` chunks TI reports to ≤ 512 tokens
+with 64-token overlap before embedding to the ``aluskort-threat-intel``
+Qdrant collection.
 """
 
 from __future__ import annotations
@@ -9,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -193,3 +198,156 @@ class EmbeddingMigrationJob:
                 self._collection,
                 [{"id": point_id, "vector": vector, "payload": payload}],
             )
+
+    # ------------------------------------------------------------------
+    # FR-RAG-004: TI report chunking and embedding
+    # ------------------------------------------------------------------
+
+    async def chunk_and_embed_ti_reports(
+        self,
+        collection: str = "aluskort-threat-intel",
+        batch_size: int = DEFAULT_BATCH_SIZE,
+    ) -> dict[str, Any]:
+        """Chunk unchunked TI reports and embed each chunk into Qdrant.
+
+        Flow:
+        1. Query Postgres for ``ti_reports`` rows whose ``id`` has no
+           corresponding entry in ``ti_report_chunks`` (i.e. never chunked).
+        2. Chunk each report body with ``TIReportChunker`` (≤ 512 tokens,
+           64-token overlap, sentence-boundary splits, instruction stripping).
+        3. Insert chunk metadata rows into ``ti_report_chunks``.
+        4. Embed each chunk text and upsert the vector to Qdrant with payload
+           ``{report_id, chunk_index, total_chunks, text}``.
+        5. Mark each chunk as embedded (``embedded_at``, ``qdrant_point_id``).
+
+        Returns a summary dict with counts of reports and chunks processed.
+        """
+        from context_gateway.chunker import TIReportChunker
+        from shared.db.vector import enrich_payload
+
+        chunker = TIReportChunker()
+        reports_processed = 0
+        chunks_embedded = 0
+        last_op_time = 0.0
+
+        # Fetch reports that have no chunks yet (left-join anti-pattern)
+        fetch_query = """
+            SELECT r.id::text AS report_id, r.body
+            FROM ti_reports r
+            WHERE NOT EXISTS (
+                SELECT 1 FROM ti_report_chunks c WHERE c.report_id = r.id
+            )
+            ORDER BY r.created_at ASC
+            LIMIT %s
+        """
+        rows = await self._pg.fetch(fetch_query, batch_size)
+
+        for row in rows:
+            report_id: str = row["report_id"]
+            body: str = row.get("body") or ""
+
+            if not body.strip():
+                logger.debug("Skipping empty TI report %s", report_id)
+                continue
+
+            chunks = chunker.chunk(body, report_id)
+            if not chunks:
+                logger.debug("No chunks produced for TI report %s", report_id)
+                continue
+
+            # Persist chunk metadata rows (idempotent via ON CONFLICT DO NOTHING)
+            insert_chunk_query = """
+                INSERT INTO ti_report_chunks
+                    (report_id, chunk_index, total_chunks, text, token_estimate)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (report_id, chunk_index) DO NOTHING
+                RETURNING id::text AS chunk_row_id
+            """
+
+            for chunk in chunks:
+                # Rate limiting
+                now = time.monotonic()
+                elapsed = now - last_op_time
+                if elapsed < self._min_interval:
+                    await asyncio.sleep(self._min_interval - elapsed)
+
+                # Persist the chunk row and retrieve its generated id
+                inserted = await self._pg.fetch(
+                    insert_chunk_query,
+                    report_id,
+                    chunk["chunk_index"],
+                    chunk["total_chunks"],
+                    chunk["text"],
+                    chunk["token_estimate"],
+                )
+
+                # Generate embedding
+                if self._embed_fn is not None:
+                    vector = await self._embed_fn({"text": chunk["text"]})
+                else:
+                    raise ValueError(
+                        "embed_fn is required for TI report chunking — "
+                        "provide an embedding function via the constructor."
+                    )
+
+                # Build Qdrant payload (use chunk_id as the point id)
+                point_id = chunk["chunk_id"]
+                payload = enrich_payload(
+                    {
+                        "report_id": report_id,
+                        "chunk_index": chunk["chunk_index"],
+                        "total_chunks": chunk["total_chunks"],
+                        "text": chunk["text"],
+                        "token_estimate": chunk["token_estimate"],
+                    }
+                )
+
+                # Upsert vector to Qdrant
+                try:
+                    await self._qdrant.upsert_point(
+                        collection, point_id, vector, payload,
+                    )
+                except AttributeError:
+                    self._qdrant.upsert_vectors(
+                        collection,
+                        [{"id": point_id, "vector": vector, "payload": payload}],
+                    )
+
+                # Mark the chunk as embedded
+                now_ts = datetime.now(timezone.utc)
+                update_query = """
+                    UPDATE ti_report_chunks
+                    SET embedded_at = %s, qdrant_point_id = %s::uuid
+                    WHERE report_id = %s::uuid AND chunk_index = %s
+                """
+                await self._pg.execute(
+                    update_query,
+                    now_ts,
+                    point_id,
+                    report_id,
+                    chunk["chunk_index"],
+                )
+
+                last_op_time = time.monotonic()
+                chunks_embedded += 1
+                logger.debug(
+                    "Embedded chunk %d/%d for report %s (point_id=%s)",
+                    chunk["chunk_index"] + 1,
+                    chunk["total_chunks"],
+                    report_id,
+                    point_id,
+                )
+
+            reports_processed += 1
+            logger.info(
+                "Chunked and embedded TI report %s: %d chunks",
+                report_id,
+                len(chunks),
+            )
+
+        return {
+            "collection": collection,
+            "reports_processed": reports_processed,
+            "chunks_embedded": chunks_embedded,
+            "status": "completed",
+        }

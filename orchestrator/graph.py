@@ -21,6 +21,7 @@ from orchestrator.persistence import InvestigationRepository
 from orchestrator.fp_shortcircuit import FPShortCircuit
 from orchestrator.agents.response_agent import ApprovalGate
 from shared.schemas.event_taxonomy import EventTaxonomy
+from llm_router.models import DEGRADATION_POLICIES, DegradationLevel, DegradationPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ class InvestigationGraph:
         fp_shortcircuit: FPShortCircuit | None = None,
         audit_producer: Any | None = None,
         shadow_mode_manager: Any | None = None,
+        health_registry: Any | None = None,
     ) -> None:
         self._repo = repository
         self._ioc = ioc_extractor
@@ -64,6 +66,14 @@ class InvestigationGraph:
         self._fp = fp_shortcircuit
         self._audit = audit_producer
         self._shadow = shadow_mode_manager
+        self._health = health_registry  # ProviderHealthRegistry for 5-level degradation
+
+    def _get_degradation_policy(self) -> DegradationPolicy:
+        """Return the current degradation policy (5-level, NFR-REL-001 to 005)."""
+        if self._health is None:
+            return DEGRADATION_POLICIES[DegradationLevel.FULL_CAPABILITY]
+        level = self._health.compute_degradation_level()
+        return DEGRADATION_POLICIES[level]
 
     async def run(
         self,
@@ -107,7 +117,22 @@ class InvestigationGraph:
     async def _execute_pipeline(
         self, state: GraphState, alert_title: str
     ) -> GraphState:
-        """Execute all pipeline stages."""
+        """Execute all pipeline stages respecting the 5-level degradation policy."""
+        policy = self._get_degradation_policy()
+
+        # Level 5 — PASSTHROUGH_ONLY: nothing is available; forward raw alert and exit
+        if policy.level.value == "passthrough_only":
+            state.state = InvestigationState.AWAITING_HUMAN
+            state.requires_human_approval = True
+            state.decision_chain.append(DecisionEntry(
+                step="degradation_check",
+                agent="orchestrator",
+                action="passthrough_mode",
+                reasoning="All infrastructure degraded — alert forwarded to analyst queue",
+            ))
+            self._emit_degraded(state, policy.level.value)
+            return state
+
         # Stage 1: IOC Extraction (RECEIVED → PARSING)
         state = await self._repo.transition(
             state, InvestigationState.PARSING,
@@ -117,13 +142,26 @@ class InvestigationGraph:
         self._emit_state_changed(state, "received", "parsing")
         state = await self._ioc.execute(state)
 
-        # Stage 1.5: FP Short-Circuit
+        # Stage 1.5: FP Short-Circuit (Redis-backed — available up to Level 4)
         if self._fp is not None:
             fp_result = await self._fp.check(state, alert_title)
             if fp_result.matched:
                 state = self._fp.apply_shortcircuit(state, fp_result)
                 self._emit_auto_closed(state, fp_result.pattern_id, fp_result.confidence)
                 return state
+
+        # Level 4 — SEARCH_ONLY: exact-match only; skip vector search + LLM reasoning
+        if policy.level.value == "search_only":
+            state.state = InvestigationState.AWAITING_HUMAN
+            state.requires_human_approval = True
+            state.decision_chain.append(DecisionEntry(
+                step="degradation_check",
+                agent="orchestrator",
+                action="search_only_mode",
+                reasoning="LLM and vector DB degraded — deterministic match only; escalating to analyst",
+            ))
+            self._emit_degraded(state, policy.level.value)
+            return state
 
         # Stage 2: Parallel Enrichment (PARSING → ENRICHING)
         state = await self._repo.transition(
@@ -133,18 +171,48 @@ class InvestigationGraph:
         )
         self._emit_state_changed(state, "parsing", "enriching")
 
-        enricher_task = self._enricher.execute(state)
-        ctem_task = self._ctem.execute(state)
-        atlas_task = self._atlas.execute(state)
+        # Level 3 — DETERMINISTIC_ONLY: run context enricher (Redis/PG) only; skip vector/graph
+        if not policy.vector_search_available or not policy.graph_reasoning_available:
+            enricher_task = self._enricher.execute(state)
+            # CTEM and ATLAS require vector/graph — skip them in deterministic mode
+            results = await asyncio.gather(enricher_task, return_exceptions=True)
+            state = self._merge_parallel_results(state, [
+                results[0],
+                Exception("skipped: deterministic_only mode"),
+                Exception("skipped: deterministic_only mode"),
+            ])
+            state.decision_chain.append(DecisionEntry(
+                step="degradation_check",
+                agent="orchestrator",
+                action="deterministic_only_mode",
+                reasoning=f"Degradation level {policy.level.value}: vector/graph search skipped",
+            ))
+            self._emit_degraded(state, policy.level.value)
+        else:
+            enricher_task = self._enricher.execute(state)
+            ctem_task = self._ctem.execute(state)
+            atlas_task = self._atlas.execute(state)
 
-        results = await asyncio.gather(
-            enricher_task, ctem_task, atlas_task,
-            return_exceptions=True,
-        )
+            results = await asyncio.gather(
+                enricher_task, ctem_task, atlas_task,
+                return_exceptions=True,
+            )
+            state = self._merge_parallel_results(state, results)
 
-        # Merge parallel results
-        state = self._merge_parallel_results(state, results)
         self._emit_enriched(state)
+
+        # Level 3 — DETERMINISTIC_ONLY: skip LLM reasoning; escalate to human
+        if not policy.llm_available:
+            state.state = InvestigationState.AWAITING_HUMAN
+            state.requires_human_approval = True
+            state.decision_chain.append(DecisionEntry(
+                step="degradation_check",
+                agent="orchestrator",
+                action="no_llm_escalation",
+                reasoning="LLM unavailable — IOC/FP matching complete; escalating to analyst for reasoning",
+            ))
+            self._emit_escalated(state)
+            return state
 
         # Stage 3: Reasoning (ENRICHING → REASONING)
         state = await self._repo.transition(
@@ -284,6 +352,23 @@ class InvestigationGraph:
         return state
 
     # ── Audit helpers (fire-and-forget) ─────────────────────────
+
+    def _emit_degraded(self, state: GraphState, level: str) -> None:
+        if self._audit is None:
+            return
+        try:
+            self._audit.emit(
+                tenant_id=state.tenant_id,
+                event_type="investigation.degraded_mode",
+                event_category="decision",
+                actor_type="agent",
+                actor_id="orchestrator",
+                investigation_id=state.investigation_id,
+                alert_id=state.alert_id,
+                context={"degradation_level": level},
+            )
+        except Exception:
+            logger.warning("Audit emit failed for investigation.degraded_mode", exc_info=True)
 
     def _emit_state_changed(self, state: GraphState, from_state: str, to_state: str) -> None:
         if self._audit is None:

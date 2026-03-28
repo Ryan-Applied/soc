@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from atlas_detection.safety_guard import ATLASSafetyGuard
 from services.dashboard.app import templates
 from services.dashboard.deps import get_db
 
@@ -334,6 +335,64 @@ async def api_fp_patterns_list(
         ]
 
     return patterns
+
+
+@router.post("/api/investigations/{investigation_id}/mark-fp")
+async def api_investigation_mark_fp(
+    investigation_id: str, request: Request
+) -> JSONResponse:
+    """Mark a specific investigation as a false positive.
+
+    FR-ATL-006: Blocked with HTTP 403 if the investigation is linked to a
+    safety-relevant ATLAS detection.  The block is also emitted as a
+    HIGH-severity audit event so the attempt is traceable.
+    """
+    body = await request.json()
+    actor_id = body.get("actor_id", "unknown")
+
+    db = get_db()
+
+    # FR-ATL-006: Validate that this investigation is not safety-critical
+    # before allowing FP classification.  ATLASSafetyGuard queries
+    # atlas_detections and blocks if safety_relevant=TRUE.
+    guard = ATLASSafetyGuard()
+    result = await guard.validate_fp_candidate(investigation_id, db)
+    if not result.allowed:
+        await guard.audit_blocked_attempt(investigation_id, actor_id, None)
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                result.reason
+                or "FP classification blocked: investigation is linked to a "
+                   "safety-relevant ATLAS detection and cannot be suppressed."
+            ),
+        )
+
+    if db is None:
+        return JSONResponse({
+            "status": "marked_fp",
+            "investigation_id": investigation_id,
+            "demo": True,
+        })
+
+    try:
+        await db.execute(
+            """
+            UPDATE investigation_state
+            SET graph_state = jsonb_set(graph_state, '{classification}', '"false_positive"'),
+                updated_at = NOW()
+            WHERE investigation_id = $1
+            """,
+            investigation_id,
+        )
+    except Exception as exc:
+        logger.error("Failed to mark investigation %s as FP: %s", investigation_id, exc)
+        raise HTTPException(500, "Failed to update investigation state")
+
+    return JSONResponse({
+        "status": "marked_fp",
+        "investigation_id": investigation_id,
+    })
 
 
 @router.post("/api/fp-patterns/approve")

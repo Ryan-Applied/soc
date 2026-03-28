@@ -192,6 +192,26 @@ services:
         condition: service_healthy
     profiles: ["services"]
 
+  wiz-connector:
+    build: .
+    command: ["python", "-m", "wiz_connector.service"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      POSTGRES_DSN: postgresql://aluskort:localdev@postgres:5432/aluskort
+      WIZ_CLIENT_ID: ${WIZ_CLIENT_ID:-}
+      WIZ_CLIENT_SECRET: ${WIZ_CLIENT_SECRET:-}
+      WIZ_API_ENDPOINT: ${WIZ_API_ENDPOINT:-https://api.us1.app.wiz.io/graphql}
+      WIZ_POLL_INTERVAL_SECONDS: ${WIZ_POLL_INTERVAL_SECONDS:-300}
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "true"]
+      interval: 30s
+    profiles: ["services"]
+
 volumes:
   kafkadata:
   pgdata:

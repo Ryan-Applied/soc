@@ -88,14 +88,27 @@ class AluskortAnthropicClient:
         messages: list[dict[str, Any]],
         model: str | None = None,
         max_tokens: int = 4096,
+        use_extended_thinking: bool = False,
     ) -> tuple[str, APICallMetrics]:
         """Send a completion request with retry on transient errors.
 
         Returns ``(response_text, metrics)``.
+
+        When *use_extended_thinking* is True, the Anthropic extended thinking
+        feature is enabled (budget_tokens=8000) and temperature is forced to 1
+        as required by the API.  Response text is extracted only from ``text``
+        blocks; ``thinking`` blocks are discarded.
         """
         import anthropic  # type: ignore[import-untyped]
 
         model = model or self.default_model
+
+        # Build extra kwargs for extended thinking (Anthropic requirement:
+        # thinking param + temperature must be exactly 1).
+        extra_kwargs: dict[str, Any] = {}
+        if use_extended_thinking:
+            extra_kwargs["thinking"] = {"type": "enabled", "budget_tokens": 8000}
+            extra_kwargs["temperature"] = 1
 
         for attempt in range(self.max_retries):
             t0 = time.monotonic()
@@ -105,6 +118,7 @@ class AluskortAnthropicClient:
                     system=system,
                     messages=messages,
                     max_tokens=max_tokens,
+                    **extra_kwargs,
                 )
                 latency = (time.monotonic() - t0) * 1000
 
@@ -118,7 +132,17 @@ class AluskortAnthropicClient:
                 )
                 metrics.cost_usd = compute_cost(metrics)
 
-                text = response.content[0].text if response.content else ""
+                # Extract only text blocks; skip thinking blocks when extended
+                # thinking is enabled (they contain internal chain-of-thought
+                # that must not be returned to callers).
+                if use_extended_thinking:
+                    text = "".join(
+                        block.text
+                        for block in response.content
+                        if getattr(block, "type", None) == "text"
+                    )
+                else:
+                    text = response.content[0].text if response.content else ""
                 return text, metrics
 
             except anthropic.RateLimitError:

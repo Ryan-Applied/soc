@@ -9,6 +9,8 @@ from typing import Any, Optional
 from qdrant_client import QdrantClient, models
 from qdrant_client.http.exceptions import UnexpectedResponse
 
+from shared.db.reranker import CrossEncoderReranker
+
 logger = logging.getLogger(__name__)
 
 # HNSW defaults tuned for security embedding workloads
@@ -21,6 +23,7 @@ COLLECTIONS = [
     "technique_embeddings",
     "playbook_embeddings",
     "ti_report_embeddings",
+    "aluskort-org-context",
 ]
 
 # Story 14.6: Embedding versioning constants
@@ -125,7 +128,7 @@ class QdrantWrapper:
             raise NonRetriableQdrantError(str(exc)) from exc
 
     def ensure_all_collections(self, vector_size: int = 1536) -> None:
-        """Create all 4 standard ALUSKORT collections."""
+        """Create all standard ALUSKORT collections (including aluskort-org-context)."""
         for name in COLLECTIONS:
             self.ensure_collection(name, vector_size)
 
@@ -295,6 +298,149 @@ class QdrantWrapper:
         except Exception:
             logger.warning("Qdrant health check failed", exc_info=True)
             return False
+
+    # ---- Organisational Context helpers (FR v1.2+) ----
+
+    _ORG_CONTEXT_COLLECTION: str = "aluskort-org-context"
+
+    def upsert_org_context(
+        self,
+        asset_id: str,
+        asset_type: str,
+        tags: list[str],
+        description: str,
+        zone: str,
+        embedding: list[float],
+    ) -> None:
+        """Upsert a single org-context asset into the aluskort-org-context collection.
+
+        The point ID is the *asset_id* string; payload stores all searchable
+        metadata so callers can decode results without a secondary DB lookup.
+
+        Args:
+            asset_id: Unique asset identifier (becomes Qdrant point ID).
+            asset_type: Asset category string (e.g. ``"server"``, ``"database"``).
+            tags: Arbitrary tag list attached to the asset.
+            description: Human-readable description used for semantic search.
+            zone: Network / trust zone (e.g. ``"dmz"``, ``"corp"``, ``"cloud"``).
+            embedding: Pre-computed embedding vector for *description*.
+        """
+        payload = enrich_payload(
+            {
+                "asset_id": asset_id,
+                "asset_type": asset_type,
+                "tags": tags,
+                "description": description,
+                "zone": zone,
+                "text": description,  # standard field name for reranker
+            }
+        )
+        self.upsert_vectors(
+            self._ORG_CONTEXT_COLLECTION,
+            [{"id": asset_id, "vector": embedding, "payload": payload}],
+        )
+
+    def search_org_context(
+        self,
+        query_embedding: list[float],
+        top_k: int = 10,
+        asset_zone_filter: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """Semantic search over the aluskort-org-context collection.
+
+        Args:
+            query_embedding: Pre-computed query vector.
+            top_k: Number of results to return.
+            asset_zone_filter: When provided, restricts results to assets in
+                that zone (exact match on the ``zone`` payload field).
+
+        Returns:
+            List of result dicts with ``id``, ``score``, and ``payload`` keys.
+        """
+        search_filter: Optional[dict[str, Any]] = None
+        if asset_zone_filter is not None:
+            search_filter = {"zone": asset_zone_filter}
+
+        return self.search(
+            collection=self._ORG_CONTEXT_COLLECTION,
+            query_vector=query_embedding,
+            limit=top_k,
+            search_filter=search_filter,
+        )
+
+    # ---- Cross-encoder reranking (FR-ENR-007) ----
+
+    async def search_and_rerank(
+        self,
+        collection: str,
+        query_vector: list[float],
+        query_text: str,
+        text_field: str = "text",
+        top_k_rerank: int = 5,
+        score_threshold: Optional[float] = None,
+        search_filter: Optional[dict[str, Any]] = None,
+        reranker: Optional[CrossEncoderReranker] = None,
+    ) -> list[dict[str, Any]]:
+        """Two-stage retrieval: ANN search followed by cross-encoder reranking.
+
+        Fetches a larger candidate set from Qdrant (at least 20, or
+        ``top_k_rerank * 4`` whichever is greater) then reranks with a
+        cross-encoder so the final results are ordered by true relevance
+        rather than ANN cosine similarity alone.
+
+        Args:
+            collection: Qdrant collection name.
+            query_vector: Pre-computed embedding for ANN retrieval.
+            query_text: Raw query string passed to the cross-encoder.
+            text_field: Payload key that holds passage text for the reranker.
+            top_k_rerank: Number of results to return after reranking.
+            score_threshold: Optional minimum ANN score for the first-stage
+                retrieval (passed through to :meth:`search`).
+            search_filter: Optional metadata filter for the first-stage search.
+            reranker: Optional pre-instantiated :class:`CrossEncoderReranker`.
+                A new default-config instance is created when *None*.
+
+        Returns:
+            List of at most *top_k_rerank* result dicts, sorted by
+            ``rerank_score`` descending.  Each dict has the standard
+            ``id``/``score``/``payload`` keys plus ``rerank_score``.
+        """
+        # First stage: retrieve a generous candidate set
+        first_stage_k = max(20, top_k_rerank * 4)
+        candidates_raw = self.search(
+            collection=collection,
+            query_vector=query_vector,
+            limit=first_stage_k,
+            score_threshold=score_threshold,
+            search_filter=search_filter,
+        )
+
+        if not candidates_raw:
+            return []
+
+        # Flatten payload into top-level dict so the reranker can access
+        # text_field directly, while preserving original structure under
+        # "payload" for downstream consumers.
+        flat_candidates: list[dict[str, Any]] = []
+        for hit in candidates_raw:
+            flat = {
+                "id": hit["id"],
+                "score": hit["score"],
+                "payload": hit["payload"],
+                # expose text at top level for the reranker
+                text_field: hit["payload"].get(text_field, ""),
+            }
+            flat_candidates.append(flat)
+
+        # Second stage: cross-encoder reranking
+        _reranker = reranker or CrossEncoderReranker()
+        reranked = await _reranker.rerank_async(
+            query=query_text,
+            candidates=flat_candidates,
+            text_field=text_field,
+            top_k=top_k_rerank,
+        )
+        return reranked
 
     def delete_collection(self, name: str) -> None:
         """Delete a collection (for tests / cleanup)."""

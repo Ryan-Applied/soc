@@ -148,14 +148,23 @@ SEVERITY_QUEUE_MAP: dict[str, str] = {
 }
 
 
-# ---- degradation levels (Story 12.4) --------------------------------------
+# ---- degradation levels (Story 12.4, NFR-REL-001 to NFR-REL-005) ----------
 
 class DegradationLevel(str, Enum):
-    """System degradation levels based on provider health."""
+    """Five-level degradation playbook (PRD NFR-REL-001 to NFR-REL-005).
+
+    Level 1 — FULL_CAPABILITY:   All providers healthy; Opus/Sonnet available.
+    Level 2 — SECONDARY_ACTIVE:  Primary (Anthropic) down; OpenAI fallback.
+    Level 3 — DETERMINISTIC_ONLY: All LLM providers down; IOC/FP/TI matching only.
+    Level 4 — SEARCH_ONLY:       Vector DB also down; Redis + Postgres exact-match only.
+    Level 5 — PASSTHROUGH_ONLY:  All data stores degraded; raw alert forwarded to queue.
+    """
 
     FULL_CAPABILITY = "full_capability"
     SECONDARY_ACTIVE = "secondary_active"
     DETERMINISTIC_ONLY = "deterministic_only"
+    SEARCH_ONLY = "search_only"
+    PASSTHROUGH_ONLY = "passthrough_only"
 
 
 @dataclass
@@ -167,6 +176,10 @@ class DegradationPolicy:
     extended_thinking_available: bool = True
     max_tier: ModelTier = ModelTier.TIER_1_PLUS
     alert_ops: bool = False
+    # Orchestrator pipeline flags
+    llm_available: bool = True
+    vector_search_available: bool = True
+    graph_reasoning_available: bool = True
 
 
 DEGRADATION_POLICIES: dict[DegradationLevel, DegradationPolicy] = {
@@ -175,6 +188,9 @@ DEGRADATION_POLICIES: dict[DegradationLevel, DegradationPolicy] = {
         confidence_threshold_override=0.0,
         extended_thinking_available=True,
         max_tier=ModelTier.TIER_1_PLUS,
+        llm_available=True,
+        vector_search_available=True,
+        graph_reasoning_available=True,
     ),
     DegradationLevel.SECONDARY_ACTIVE: DegradationPolicy(
         level=DegradationLevel.SECONDARY_ACTIVE,
@@ -182,6 +198,9 @@ DEGRADATION_POLICIES: dict[DegradationLevel, DegradationPolicy] = {
         extended_thinking_available=False,
         max_tier=ModelTier.TIER_1,
         alert_ops=True,
+        llm_available=True,
+        vector_search_available=True,
+        graph_reasoning_available=True,
     ),
     DegradationLevel.DETERMINISTIC_ONLY: DegradationPolicy(
         level=DegradationLevel.DETERMINISTIC_ONLY,
@@ -189,5 +208,28 @@ DEGRADATION_POLICIES: dict[DegradationLevel, DegradationPolicy] = {
         extended_thinking_available=False,
         max_tier=ModelTier.TIER_0,
         alert_ops=True,
+        llm_available=False,
+        vector_search_available=True,
+        graph_reasoning_available=True,
+    ),
+    DegradationLevel.SEARCH_ONLY: DegradationPolicy(
+        level=DegradationLevel.SEARCH_ONLY,
+        confidence_threshold_override=1.0,
+        extended_thinking_available=False,
+        max_tier=ModelTier.TIER_0,
+        alert_ops=True,
+        llm_available=False,
+        vector_search_available=False,
+        graph_reasoning_available=False,
+    ),
+    DegradationLevel.PASSTHROUGH_ONLY: DegradationPolicy(
+        level=DegradationLevel.PASSTHROUGH_ONLY,
+        confidence_threshold_override=1.0,
+        extended_thinking_available=False,
+        max_tier=ModelTier.TIER_0,
+        alert_ops=True,
+        llm_available=False,
+        vector_search_available=False,
+        graph_reasoning_available=False,
     ),
 }
