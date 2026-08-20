@@ -1,10 +1,17 @@
 # Application Load Balancer — public ingress for the dashboard
 
-variable "name_prefix"      { type = string }
-variable "vpc_id"           { type = string }
+variable "name_prefix" { type = string }
+variable "vpc_id" { type = string }
 variable "public_subnet_ids" { type = list(string) }
-variable "certificate_arn"  { type = string; default = "" }
-variable "domain_name"      { type = string; default = "" }
+variable "certificate_arn" {
+  type    = string
+  default = ""
+}
+
+variable "domain_name" {
+  type    = string
+  default = ""
+}
 
 resource "aws_security_group" "alb" {
   name_prefix = "${var.name_prefix}-alb-"
@@ -150,6 +157,6 @@ resource "aws_lb_listener" "http" {
   }
 }
 
-output "dns_name"                  { value = aws_lb.main.dns_name }
-output "alb_security_group_id"     { value = aws_security_group.alb.id }
+output "dns_name" { value = aws_lb.main.dns_name }
+output "alb_security_group_id" { value = aws_security_group.alb.id }
 output "dashboard_target_group_arn" { value = aws_lb_target_group.dashboard.arn }

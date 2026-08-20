@@ -60,6 +60,7 @@ class GraphState(BaseModel):
     state: InvestigationState = InvestigationState.RECEIVED
     alert_id: str = ""
     tenant_id: str = ""
+    source_context: dict[str, Any] = Field(default_factory=dict)
     entities: dict[str, Any] = Field(default_factory=dict)
     ioc_matches: list[Any] = Field(default_factory=list)
     ueba_context: list[Any] = Field(default_factory=list)

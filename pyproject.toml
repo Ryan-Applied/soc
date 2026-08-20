@@ -19,12 +19,14 @@ dependencies = [
     "aiohttp>=3.9.0",
     "httpx>=0.26.0",
     "websockets>=12.0",
+    "azure-identity>=1.19.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
     "cryptography>=42.0",
 ]
 
@@ -33,3 +35,29 @@ include = ["shared*", "infra*", "entity_parser*", "sentinel_adapter*", "elastic_
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = [
+    "atlas_detection",
+    "batch_scheduler",
+    "context_gateway",
+    "ctem_normaliser",
+    "elastic_adapter",
+    "entity_parser",
+    "llm_router",
+    "ops",
+    "orchestrator",
+    "sentinel_adapter",
+    "services",
+    "shared",
+    "splunk_adapter",
+    "wiz_connector",
+]
+
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
+show_missing = true

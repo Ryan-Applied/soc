@@ -1,17 +1,20 @@
 # ECS Fargate cluster and service definitions
 
-variable "name_prefix"           { type = string }
-variable "vpc_id"                { type = string }
-variable "private_subnet_ids"    { type = list(string) }
-variable "aws_region"            { type = string }
-variable "account_id"            { type = string }
-variable "services"              { type = map(any) }
-variable "ecr_urls"              { type = map(string) }
-variable "alb_target_group_arn"  { type = string }
-variable "secrets_arn"           { type = string }
-variable "postgres_dsn"          { type = string; sensitive = true }
-variable "redis_host"            { type = string }
-variable "kafka_brokers"         { type = string }
+variable "name_prefix" { type = string }
+variable "vpc_id" { type = string }
+variable "private_subnet_ids" { type = list(string) }
+variable "aws_region" { type = string }
+variable "account_id" { type = string }
+variable "services" { type = map(any) }
+variable "ecr_urls" { type = map(string) }
+variable "alb_target_group_arn" { type = string }
+variable "secrets_arn" { type = string }
+variable "postgres_dsn" {
+  type      = string
+  sensitive = true
+}
+variable "redis_host" { type = string }
+variable "kafka_brokers" { type = string }
 
 # --- ECS Cluster ---
 resource "aws_ecs_cluster" "main" {
@@ -47,10 +50,10 @@ resource "aws_security_group" "ecs" {
 
   # Allow inter-service communication
   ingress {
-    from_port = 0
-    to_port   = 65535
-    protocol  = "tcp"
-    self      = true
+    from_port   = 0
+    to_port     = 65535
+    protocol    = "tcp"
+    self        = true
     description = "Inter-service traffic"
   }
 
@@ -81,8 +84,8 @@ resource "aws_iam_role" "ecs_exec" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Action = "sts:AssumeRole"
-      Effect = "Allow"
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
       Principal = { Service = "ecs-tasks.amazonaws.com" }
     }]
   })
@@ -112,8 +115,8 @@ resource "aws_iam_role" "ecs_task" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Action = "sts:AssumeRole"
-      Effect = "Allow"
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
       Principal = { Service = "ecs-tasks.amazonaws.com" }
     }]
   })
@@ -172,10 +175,10 @@ resource "aws_ecs_task_definition" "svc" {
     }] : []
 
     environment = [
-      { name = "POSTGRES_DSN",              value = var.postgres_dsn },
-      { name = "REDIS_HOST",                value = var.redis_host },
-      { name = "KAFKA_BOOTSTRAP_SERVERS",   value = var.kafka_brokers },
-      { name = "ENVIRONMENT",               value = "production" },
+      { name = "POSTGRES_DSN", value = var.postgres_dsn },
+      { name = "REDIS_HOST", value = var.redis_host },
+      { name = "KAFKA_BOOTSTRAP_SERVERS", value = var.kafka_brokers },
+      { name = "ENVIRONMENT", value = "production" },
     ]
 
     secrets = [
@@ -244,7 +247,7 @@ resource "aws_ecs_service" "svc" {
   tags = { Service = each.key }
 
   lifecycle {
-    ignore_changes = [desired_count]  # Allow autoscaling
+    ignore_changes = [desired_count] # Allow autoscaling
   }
 }
 
@@ -276,5 +279,5 @@ resource "aws_appautoscaling_policy" "dashboard_cpu" {
   }
 }
 
-output "cluster_name"          { value = aws_ecs_cluster.main.name }
+output "cluster_name" { value = aws_ecs_cluster.main.name }
 output "ecs_security_group_id" { value = aws_security_group.ecs.id }

@@ -27,25 +27,24 @@ class MockPostgresClient:
 
     async def execute(self, query: str, *args: Any) -> None:
         # Handle INSERT/UPDATE for investigations
-        if "INSERT INTO investigations" in query:
+        if "INSERT INTO investigation_state" in query:
             inv_id = args[0]
             self._investigations[inv_id] = {
                 "investigation_id": inv_id,
                 "alert_id": args[1],
                 "tenant_id": args[2],
                 "state": args[3],
-                "graphstate_json": json.loads(args[4]) if isinstance(args[4], str) else args[4],
-                "decision_chain": json.loads(args[5]) if isinstance(args[5], str) else args[5],
+                "graph_state": json.loads(args[4]) if isinstance(args[4], str) else args[4],
                 "updated_at": "2026-02-14T10:00:00Z",
                 "created_at": "2026-02-14T09:00:00Z",
             }
 
     async def fetch_one(self, query: str, *args: Any) -> dict[str, Any] | None:
-        if "SELECT graphstate_json FROM investigations" in query:
+        if "SELECT graph_state FROM investigation_state" in query:
             inv_id = args[0]
             row = self._investigations.get(inv_id)
             if row:
-                return {"graphstate_json": row["graphstate_json"]}
+                return {"graph_state": row["graph_state"]}
             return None
         if "SELECT COUNT(*) AS count FROM kill_switches" in query:
             return {"count": 0}
@@ -56,25 +55,26 @@ class MockPostgresClient:
         return None
 
     async def fetch_many(self, query: str, *args: Any) -> list[dict[str, Any]]:
-        if "FROM investigations" in query:
-            results = list(self._investigations.values())
-            # Apply state filter if present
-            if args and "WHERE" in query and "state = $1" in query.replace("1=1\n    ", ""):
-                state_filter = args[0] if args else ""
-                if state_filter:
-                    results = [r for r in results if r.get("state") == state_filter]
-            # Add severity from graphstate_json
-            for r in results:
-                gs = r.get("graphstate_json", {})
-                if isinstance(gs, dict):
-                    r["severity"] = gs.get("severity", "")
-            return results
         if "GROUP BY state" in query:
             state_counts: dict[str, int] = {}
             for inv in self._investigations.values():
-                s = inv.get("state", "unknown")
-                state_counts[s] = state_counts.get(s, 0) + 1
-            return [{"state": k, "count": v} for k, v in state_counts.items()]
+                state = inv.get("state", "unknown")
+                state_counts[state] = state_counts.get(state, 0) + 1
+            return [{"state": key, "count": value} for key, value in state_counts.items()]
+        if "FROM investigation_state" in query:
+            results = list(self._investigations.values())
+            # Apply state filter if present
+            if args and "state = $1" in query:
+                state_filter = args[0] if args else ""
+                if state_filter:
+                    results = [r for r in results if r.get("state") == state_filter]
+            # Add fields projected from graph_state JSONB by dashboard queries.
+            for r in results:
+                gs = r.get("graph_state", {})
+                if isinstance(gs, dict):
+                    r["severity"] = gs.get("severity", "")
+                    r["classification"] = gs.get("classification", "")
+            return results
         if "GROUP BY" in query:
             return []
         return []
@@ -122,8 +122,7 @@ def _seed_investigation(
         "alert_id": alert_id,
         "tenant_id": tenant_id,
         "state": state,
-        "graphstate_json": json.loads(gs.model_dump_json()),
-        "decision_chain": gs.decision_chain,
+        "graph_state": json.loads(gs.model_dump_json()),
         "updated_at": "2026-02-14T10:01:00Z",
         "created_at": "2026-02-14T09:00:00Z",
     }

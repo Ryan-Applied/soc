@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   # --- Infrastructure ---
   kafka:
@@ -96,14 +94,17 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       POSTGRES_DSN: postgresql://aluskort:localdev@postgres:5432/aluskort
+      HEALTH_PORT: "8082"
     depends_on:
       kafka:
         condition: service_healthy
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "true"]
-      interval: 30s
+      test: ["CMD", "curl", "-f", "http://localhost:8082/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
     profiles: ["services"]
 
   context-gateway:
@@ -118,6 +119,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8030/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
     profiles: ["services"]
 
   llm-router:
@@ -142,6 +148,7 @@ services:
       REDIS_HOST: redis
       NEO4J_URI: bolt://neo4j:7687
       CONTEXT_GATEWAY_URL: http://context-gateway:8030
+      HEALTH_PORT: "8081"
     depends_on:
       kafka:
         condition: service_healthy
@@ -154,10 +161,12 @@ services:
       neo4j:
         condition: service_healthy
       context-gateway:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "true"]
-      interval: 30s
+      test: ["CMD", "curl", "-f", "http://localhost:8081/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
     profiles: ["services"]
 
   ctem-normaliser:
@@ -166,14 +175,17 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       POSTGRES_DSN: postgresql://aluskort:localdev@postgres:5432/aluskort
+      HEALTH_PORT: "8083"
     depends_on:
       kafka:
         condition: service_healthy
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "true"]
-      interval: 30s
+      test: ["CMD", "curl", "-f", "http://localhost:8083/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
     profiles: ["services"]
 
   dashboard:
@@ -182,6 +194,11 @@ services:
     environment:
       POSTGRES_DSN: postgresql://aluskort:localdev@postgres:5432/aluskort
       REDIS_HOST: redis
+      APP_ENV: production
+      DASHBOARD_AUTH_MODE: entra
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
+      DASHBOARD_ENTRA_CLIENT_ID: ${DASHBOARD_ENTRA_CLIENT_ID:-}
+      ENABLE_TEST_HARNESS: "false"
       PORT: "8080"
     ports:
       - "8080:8080"
@@ -190,6 +207,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
     profiles: ["services"]
 
   wiz-connector:
@@ -208,9 +230,63 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "true"]
+      test: ["CMD-SHELL", "kill -0 1"]
       interval: 30s
     profiles: ["services"]
+
+  sentinel-adapter:
+    build: .
+    command: ["uvicorn", "sentinel_adapter.service:app", "--host", "0.0.0.0", "--port", "8032"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      POSTGRES_DSN: postgresql://aluskort:localdev@postgres:5432/aluskort
+      SENTINEL_WORKSPACE_ID: ${SENTINEL_WORKSPACE_ID:-}
+      SENTINEL_CONNECTOR_ID: ${SENTINEL_CONNECTOR_ID:-sentinel-default}
+      SENTINEL_POLL_INTERVAL_SECONDS: ${SENTINEL_POLL_INTERVAL_SECONDS:-30}
+      SENTINEL_OVERLAP_SECONDS: ${SENTINEL_OVERLAP_SECONDS:-60}
+      SENTINEL_SUBSCRIPTION_ID: ${SENTINEL_SUBSCRIPTION_ID:-}
+      SENTINEL_RESOURCE_GROUP: ${SENTINEL_RESOURCE_GROUP:-}
+      SENTINEL_WORKSPACE_NAME: ${SENTINEL_WORKSPACE_NAME:-}
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+      AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}
+      PORT: "8032"
+    ports:
+      - "8032:8032"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8032/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    profiles: ["sentinel"]
+
+  sentinel-writeback:
+    build: .
+    command: ["uvicorn", "sentinel_adapter.writeback_service:app", "--host", "0.0.0.0", "--port", "8033"]
+    environment:
+      POSTGRES_DSN: postgresql://aluskort:localdev@postgres:5432/aluskort
+      SENTINEL_WRITEBACK_POLL_SECONDS: ${SENTINEL_WRITEBACK_POLL_SECONDS:-10}
+      SENTINEL_WRITEBACK_BATCH_SIZE: ${SENTINEL_WRITEBACK_BATCH_SIZE:-10}
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+      AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}
+      PORT: "8033"
+    ports:
+      - "8033:8033"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8033/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    profiles: ["sentinel"]
 
 volumes:
   kafkadata:

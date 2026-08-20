@@ -40,6 +40,9 @@ async def lifespan(application: FastAPI):
 
     postgres_dsn = os.environ.get("POSTGRES_DSN", "")
     redis_host = os.environ.get("REDIS_HOST", "")
+    production = os.environ.get("APP_ENV", "development").lower() == "production"
+    if production and (not postgres_dsn or not redis_host):
+        raise RuntimeError("Production dashboard requires Postgres and Redis")
 
     db = None
     if postgres_dsn:
@@ -50,6 +53,8 @@ async def lifespan(application: FastAPI):
             _pg_client = db
             logger.info("Dashboard connected to Postgres")
         except Exception:
+            if production:
+                raise
             logger.warning("Dashboard: Postgres connection failed", exc_info=True)
 
     rc = None
@@ -61,6 +66,11 @@ async def lifespan(application: FastAPI):
             _redis_client = rc
             logger.info("Dashboard connected to Redis")
         except Exception:
+            if production:
+                if _pg_client is not None:
+                    await _pg_client.close()
+                    _pg_client = None
+                raise
             logger.warning("Dashboard: Redis connection failed", exc_info=True)
 
     init_deps(db, rc)

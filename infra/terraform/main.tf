@@ -81,61 +81,61 @@ module "secrets" {
 }
 
 module "rds" {
-  source              = "./modules/rds"
-  name_prefix         = local.name_prefix
-  vpc_id              = module.vpc.vpc_id
-  private_subnet_ids  = module.vpc.private_subnet_ids
-  db_instance_class   = var.db_instance_class
-  db_name             = "aluskort"
-  db_username         = "aluskort"
-  db_password         = var.db_password
-  multi_az            = var.environment == "prod"
-  ecs_security_group  = module.ecs.ecs_security_group_id
+  source             = "./modules/rds"
+  name_prefix        = local.name_prefix
+  vpc_id             = module.vpc.vpc_id
+  private_subnet_ids = module.vpc.private_subnet_ids
+  db_instance_class  = var.db_instance_class
+  db_name            = "aluskort"
+  db_username        = "aluskort"
+  db_password        = var.db_password
+  multi_az           = var.environment == "prod"
+  ecs_security_group = module.ecs.ecs_security_group_id
 }
 
 module "elasticache" {
-  source              = "./modules/elasticache"
-  name_prefix         = local.name_prefix
-  vpc_id              = module.vpc.vpc_id
-  private_subnet_ids  = module.vpc.private_subnet_ids
-  node_type           = var.redis_node_type
-  ecs_security_group  = module.ecs.ecs_security_group_id
+  source             = "./modules/elasticache"
+  name_prefix        = local.name_prefix
+  vpc_id             = module.vpc.vpc_id
+  private_subnet_ids = module.vpc.private_subnet_ids
+  node_type          = var.redis_node_type
+  ecs_security_group = module.ecs.ecs_security_group_id
 }
 
 module "msk" {
-  source              = "./modules/msk"
-  name_prefix         = local.name_prefix
-  vpc_id              = module.vpc.vpc_id
-  private_subnet_ids  = module.vpc.private_subnet_ids
-  instance_type       = var.kafka_instance_type
-  ecs_security_group  = module.ecs.ecs_security_group_id
+  source             = "./modules/msk"
+  name_prefix        = local.name_prefix
+  vpc_id             = module.vpc.vpc_id
+  private_subnet_ids = module.vpc.private_subnet_ids
+  instance_type      = var.kafka_instance_type
+  ecs_security_group = module.ecs.ecs_security_group_id
 }
 
 module "alb" {
-  source             = "./modules/alb"
-  name_prefix        = local.name_prefix
-  vpc_id             = module.vpc.vpc_id
-  public_subnet_ids  = module.vpc.public_subnet_ids
-  certificate_arn    = var.acm_certificate_arn
-  domain_name        = var.domain_name
+  source            = "./modules/alb"
+  name_prefix       = local.name_prefix
+  vpc_id            = module.vpc.vpc_id
+  public_subnet_ids = module.vpc.public_subnet_ids
+  certificate_arn   = var.acm_certificate_arn
+  domain_name       = var.domain_name
 }
 
 module "ecs" {
-  source              = "./modules/ecs"
-  name_prefix         = local.name_prefix
-  vpc_id              = module.vpc.vpc_id
-  private_subnet_ids  = module.vpc.private_subnet_ids
-  aws_region          = var.aws_region
-  account_id          = local.account_id
-  services            = var.ecs_services
-  ecr_urls            = module.ecr.repository_urls
+  source               = "./modules/ecs"
+  name_prefix          = local.name_prefix
+  vpc_id               = module.vpc.vpc_id
+  private_subnet_ids   = module.vpc.private_subnet_ids
+  aws_region           = var.aws_region
+  account_id           = local.account_id
+  services             = var.ecs_services
+  ecr_urls             = module.ecr.repository_urls
   alb_target_group_arn = module.alb.dashboard_target_group_arn
-  secrets_arn         = module.secrets.secrets_arn
+  secrets_arn          = module.secrets.secrets_arn
 
   # Connection strings passed as env vars
-  postgres_dsn        = "postgresql://aluskort:${var.db_password}@${module.rds.endpoint}/aluskort"
-  redis_host          = module.elasticache.endpoint
-  kafka_brokers       = module.msk.bootstrap_brokers
+  postgres_dsn  = "postgresql://aluskort:${var.db_password}@${module.rds.endpoint}/aluskort"
+  redis_host    = module.elasticache.endpoint
+  kafka_brokers = module.msk.bootstrap_brokers
 
   depends_on = [module.rds, module.elasticache, module.msk, module.alb]
 }

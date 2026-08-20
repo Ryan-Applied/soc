@@ -41,7 +41,7 @@ class TestEventTaxonomy:
 
     def test_action_events_count(self):
         count = sum(1 for v in EVENT_CATEGORY_MAP.values() if v == EventCategory.ACTION)
-        assert count == 11
+        assert count == 12
 
     def test_approval_events_count(self):
         count = sum(1 for v in EVENT_CATEGORY_MAP.values() if v == EventCategory.APPROVAL)
@@ -49,7 +49,7 @@ class TestEventTaxonomy:
 
     def test_security_events_count(self):
         count = sum(1 for v in EVENT_CATEGORY_MAP.values() if v == EventCategory.SECURITY)
-        assert count == 6
+        assert count == 7
 
     def test_system_events_count(self):
         count = sum(1 for v in EVENT_CATEGORY_MAP.values() if v == EventCategory.SYSTEM)

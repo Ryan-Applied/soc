@@ -131,6 +131,53 @@ class TestHappyPath:
         assert result.investigation_id  # UUID should be set
 
     @pytest.mark.asyncio
+    async def test_same_tenant_alert_has_deterministic_investigation_id(
+        self, graph, mock_repo
+    ):
+        first = await graph.run("alert-stable", "tenant-A", {})
+        mock_repo.load.return_value = None
+        second = await graph.run("alert-stable", "tenant-A", {})
+        assert first.investigation_id == second.investigation_id
+
+    @pytest.mark.asyncio
+    async def test_duplicate_terminal_alert_returns_existing_state(
+        self, graph, mock_repo
+    ):
+        existing = GraphState(
+            investigation_id="existing",
+            alert_id="alert-001",
+            tenant_id="tenant-A",
+            state=InvestigationState.CLOSED,
+            classification="true_positive",
+        )
+        mock_repo.load.return_value = existing
+
+        result = await graph.run("alert-001", "tenant-A", {})
+
+        assert result is existing
+        mock_repo.save.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_interrupted_stage_resumes_same_investigation(
+        self, graph, mock_repo
+    ):
+        existing = GraphState(
+            investigation_id="existing",
+            alert_id="alert-001",
+            tenant_id="tenant-A",
+            state=InvestigationState.PARSING,
+        )
+        mock_repo.load.return_value = existing
+
+        result = await graph.run("alert-001", "tenant-A", {})
+
+        assert result.investigation_id == "existing"
+        assert any(
+            getattr(entry, "action", "") == "resume_interrupted_investigation"
+            for entry in result.decision_chain
+        )
+
+    @pytest.mark.asyncio
     async def test_decision_chain_populated(self, graph):
         result = await graph.run(
             alert_id="alert-001",

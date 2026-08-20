@@ -170,7 +170,8 @@ class TestSplunkHECConnector:
 class TestSplunkSavedSearchConnector:
     """Tests for the polling-based saved-search connector."""
 
-    def test_poll_once_calls_splunk_api(self):
+    @pytest.mark.asyncio
+    async def test_poll_once_calls_splunk_api(self):
         """_poll_once sends a GET to /services/saved/searches."""
         connector = SplunkSavedSearchConnector.__new__(SplunkSavedSearchConnector)
         connector.splunk_host = "https://splunk:8089"
@@ -181,13 +182,14 @@ class TestSplunkSavedSearchConnector:
 
         mock_mod, mock_session = _make_mock_aiohttp({"entry": []})
         with patch.dict(sys.modules, {"aiohttp": mock_mod}):
-            asyncio.get_event_loop().run_until_complete(connector._poll_once())
+            await connector._poll_once()
 
         mock_session.get.assert_called_once()
         call_url = mock_session.get.call_args[0][0]
         assert "/services/saved/searches" in call_url
 
-    def test_poll_publishes_to_kafka(self):
+    @pytest.mark.asyncio
+    async def test_poll_publishes_to_kafka(self):
         """Valid saved-search entries are published to Kafka."""
         connector = SplunkSavedSearchConnector.__new__(SplunkSavedSearchConnector)
         connector.splunk_host = "https://splunk:8089"
@@ -216,12 +218,13 @@ class TestSplunkSavedSearchConnector:
 
         mock_mod, mock_session = _make_mock_aiohttp({"entry": [entry]})
         with patch.dict(sys.modules, {"aiohttp": mock_mod}):
-            asyncio.get_event_loop().run_until_complete(connector._poll_once())
+            await connector._poll_once()
 
         connector.producer.produce.assert_called_once()
         assert connector.producer.produce.call_args[1]["topic"] == "alerts.raw"
 
-    def test_retry_on_failure(self):
+    @pytest.mark.asyncio
+    async def test_retry_on_failure(self):
         """retry_with_backoff retries on transient failures."""
         call_count = 0
 
@@ -234,8 +237,6 @@ class TestSplunkSavedSearchConnector:
 
         from sentinel_adapter.connector import retry_with_backoff
 
-        result = asyncio.get_event_loop().run_until_complete(
-            retry_with_backoff(flaky, max_retries=3, base_delay=0.01)
-        )
+        result = await retry_with_backoff(flaky, max_retries=3, base_delay=0.01)
         assert result == "ok"
         assert call_count == 2

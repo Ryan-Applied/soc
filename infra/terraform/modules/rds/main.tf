@@ -1,14 +1,21 @@
 # RDS PostgreSQL 16 — primary data store
 
-variable "name_prefix"         { type = string }
-variable "vpc_id"              { type = string }
-variable "private_subnet_ids"  { type = list(string) }
-variable "db_instance_class"   { type = string }
-variable "db_name"             { type = string }
-variable "db_username"         { type = string }
-variable "db_password"         { type = string; sensitive = true }
-variable "multi_az"            { type = bool; default = true }
-variable "ecs_security_group"  { type = string }
+variable "name_prefix" { type = string }
+variable "vpc_id" { type = string }
+variable "private_subnet_ids" { type = list(string) }
+variable "db_instance_class" { type = string }
+variable "db_name" { type = string }
+variable "db_username" { type = string }
+variable "db_password" {
+  type      = string
+  sensitive = true
+}
+
+variable "multi_az" {
+  type    = bool
+  default = true
+}
+variable "ecs_security_group" { type = string }
 
 resource "aws_db_subnet_group" "main" {
   name       = "${var.name_prefix}-db"
@@ -47,7 +54,7 @@ resource "aws_db_parameter_group" "main" {
 
   parameter {
     name  = "log_min_duration_statement"
-    value = "1000"  # Log queries > 1s
+    value = "1000" # Log queries > 1s
   }
   parameter {
     name  = "shared_preload_libraries"
@@ -92,5 +99,5 @@ resource "aws_db_instance" "main" {
   tags = { Name = "${var.name_prefix}-postgres" }
 }
 
-output "endpoint"      { value = aws_db_instance.main.endpoint }
+output "endpoint" { value = aws_db_instance.main.endpoint }
 output "db_identifier" { value = aws_db_instance.main.identifier }

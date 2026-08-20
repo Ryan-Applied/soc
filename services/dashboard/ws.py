@@ -14,6 +14,8 @@ from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from services.dashboard.middleware.auth import DashboardAuthenticator
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,6 +57,14 @@ async def websocket_investigations(ws: WebSocket) -> None:
     Uses ``hx-ext="ws"`` with ``ws-connect="/ws/investigations"`` on the
     client side.
     """
+    authenticator = DashboardAuthenticator()
+    try:
+        principal = await authenticator.authenticate(ws.headers)
+    except Exception:
+        await ws.close(code=1008, reason="Authentication required")
+        return
+    ws.state.user_id = principal.user_id
+    ws.state.user_role = principal.role
     await manager.connect(ws)
     try:
         while True:

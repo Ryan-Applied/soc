@@ -1,9 +1,9 @@
 # CloudWatch monitoring, dashboards, and alarms
 
-variable "name_prefix"    { type = string }
-variable "ecs_cluster"    { type = string }
-variable "services"       { type = map(any) }
-variable "alarm_email"    { type = string }
+variable "name_prefix" { type = string }
+variable "ecs_cluster" { type = string }
+variable "services" { type = map(any) }
+variable "alarm_email" { type = string }
 variable "rds_identifier" { type = string }
 
 # --- SNS topic for alarms ---
@@ -83,7 +83,7 @@ resource "aws_cloudwatch_metric_alarm" "rds_storage" {
   namespace           = "AWS/RDS"
   period              = 300
   statistic           = "Average"
-  threshold           = 5000000000  # 5 GB
+  threshold           = 5000000000 # 5 GB
   alarm_description   = "RDS free storage < 5 GB"
   alarm_actions       = [aws_sns_topic.alarms.arn]
   dimensions          = { DBInstanceIdentifier = var.rds_identifier }
@@ -116,8 +116,8 @@ resource "aws_cloudwatch_dashboard" "main" {
         width  = 8
         height = 6
         properties = {
-          title   = "${svc} CPU & Memory"
-          region  = "us-east-1"
+          title  = "${svc} CPU & Memory"
+          region = "us-east-1"
           metrics = [
             ["AWS/ECS", "CPUUtilization", "ClusterName", var.ecs_cluster, "ServiceName", svc, { stat = "Average", label = "CPU %" }],
             ["AWS/ECS", "MemoryUtilization", "ClusterName", var.ecs_cluster, "ServiceName", svc, { stat = "Average", label = "Memory %" }],
@@ -135,8 +135,8 @@ resource "aws_cloudwatch_dashboard" "main" {
         width  = 12
         height = 6
         properties = {
-          title   = "RDS PostgreSQL"
-          region  = "us-east-1"
+          title  = "RDS PostgreSQL"
+          region = "us-east-1"
           metrics = [
             ["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", var.rds_identifier, { stat = "Average" }],
             ["AWS/RDS", "DatabaseConnections", "DBInstanceIdentifier", var.rds_identifier, { stat = "Average", yAxis = "right" }],

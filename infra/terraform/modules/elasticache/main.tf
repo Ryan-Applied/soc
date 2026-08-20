@@ -1,9 +1,9 @@
 # ElastiCache Redis — caching and pub/sub
 
-variable "name_prefix"        { type = string }
-variable "vpc_id"             { type = string }
+variable "name_prefix" { type = string }
+variable "vpc_id" { type = string }
 variable "private_subnet_ids" { type = list(string) }
-variable "node_type"          { type = string }
+variable "node_type" { type = string }
 variable "ecs_security_group" { type = string }
 
 resource "aws_elasticache_subnet_group" "main" {

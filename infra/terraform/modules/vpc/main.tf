@@ -1,14 +1,14 @@
 # VPC with public + private subnets across 3 AZs
 
 variable "name_prefix" { type = string }
-variable "azs"         { type = list(string) }
-variable "vpc_cidr"    { type = string }
+variable "azs" { type = list(string) }
+variable "vpc_cidr" { type = string }
 
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
-  tags = { Name = "${var.name_prefix}-vpc" }
+  tags                 = { Name = "${var.name_prefix}-vpc" }
 }
 
 resource "aws_internet_gateway" "main" {
@@ -23,7 +23,7 @@ resource "aws_subnet" "public" {
   cidr_block              = cidrsubnet(var.vpc_cidr, 8, count.index)
   availability_zone       = var.azs[count.index]
   map_public_ip_on_launch = true
-  tags = { Name = "${var.name_prefix}-public-${var.azs[count.index]}" }
+  tags                    = { Name = "${var.name_prefix}-public-${var.azs[count.index]}" }
 }
 
 resource "aws_route_table" "public" {
@@ -43,7 +43,7 @@ resource "aws_route_table_association" "public" {
 
 # --- NAT Gateway (one per AZ for HA in prod) ---
 resource "aws_eip" "nat" {
-  count  = 1  # Single NAT to save cost; increase for HA
+  count  = 1 # Single NAT to save cost; increase for HA
   domain = "vpc"
   tags   = { Name = "${var.name_prefix}-nat-eip" }
 }
@@ -62,7 +62,7 @@ resource "aws_subnet" "private" {
   vpc_id            = aws_vpc.main.id
   cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index + 100)
   availability_zone = var.azs[count.index]
-  tags = { Name = "${var.name_prefix}-private-${var.azs[count.index]}" }
+  tags              = { Name = "${var.name_prefix}-private-${var.azs[count.index]}" }
 }
 
 resource "aws_route_table" "private" {
@@ -99,8 +99,8 @@ resource "aws_iam_role" "flow_logs" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Action = "sts:AssumeRole"
-      Effect = "Allow"
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
       Principal = { Service = "vpc-flow-logs.amazonaws.com" }
     }]
   })
@@ -122,6 +122,6 @@ resource "aws_iam_role_policy" "flow_logs" {
   })
 }
 
-output "vpc_id"             { value = aws_vpc.main.id }
-output "public_subnet_ids"  { value = aws_subnet.public[*].id }
+output "vpc_id" { value = aws_vpc.main.id }
+output "public_subnet_ids" { value = aws_subnet.public[*].id }
 output "private_subnet_ids" { value = aws_subnet.private[*].id }

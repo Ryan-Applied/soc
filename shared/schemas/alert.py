@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 SeverityLevel = Literal["critical", "high", "medium", "low", "informational"]
 
@@ -23,12 +23,13 @@ class CanonicalAlert(BaseModel):
     title: str
     description: str
     severity: SeverityLevel
-    tactics: list[str] = []
-    techniques: list[str] = []
+    tactics: list[str] = Field(default_factory=list)
+    techniques: list[str] = Field(default_factory=list)
     entities_raw: str = ""
     product: str = ""
     tenant_id: str = ""
-    raw_payload: dict[str, Any] = {}
+    source_context: dict[str, Any] = Field(default_factory=dict)
+    raw_payload: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("timestamp")
     @classmethod

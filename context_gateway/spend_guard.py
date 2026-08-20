@@ -143,7 +143,7 @@ class SpendGuard:
             If the tenant's monthly cap would be exceeded.
         """
         # --- global hard cap -------------------------------------------
-        if self.monthly_total + cost_usd > self.monthly_hard_cap:
+        if self.monthly_total + cost_usd >= self.monthly_hard_cap:
             raise SpendLimitExceeded(
                 f"Monthly spend ${self.monthly_total + cost_usd:.2f} "
                 f"exceeds global hard cap ${self.monthly_hard_cap:.2f}"
@@ -175,7 +175,7 @@ class SpendGuard:
             If the tenant's monthly cap would be exceeded.
         """
         # --- global hard cap -------------------------------------------
-        if self.monthly_total + cost_usd > self.monthly_hard_cap:
+        if self.monthly_total + cost_usd >= self.monthly_hard_cap:
             raise SpendLimitExceeded(
                 f"Monthly spend ${self.monthly_total + cost_usd:.2f} "
                 f"exceeds global hard cap ${self.monthly_hard_cap:.2f}"

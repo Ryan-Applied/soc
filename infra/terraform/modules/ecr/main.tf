@@ -1,7 +1,7 @@
 # ECR repositories for each microservice
 
 variable "name_prefix" { type = string }
-variable "services"    { type = map(any) }
+variable "services" { type = map(any) }
 
 resource "aws_ecr_repository" "svc" {
   for_each = var.services

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import sys
+from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,6 +19,23 @@ from sentinel_adapter.connector import (
     retry_with_backoff,
 )
 from sentinel_adapter.adapter import SentinelAdapter
+
+
+def _mock_aiohttp(response_json: dict):
+    response = AsyncMock()
+    response.raise_for_status = MagicMock()
+    response.json = AsyncMock(return_value=response_json)
+    response.__aenter__ = AsyncMock(return_value=response)
+    response.__aexit__ = AsyncMock(return_value=False)
+
+    session = AsyncMock()
+    session.post = MagicMock(return_value=response)
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+
+    module = ModuleType("aiohttp")
+    module.ClientSession = MagicMock(return_value=session)  # type: ignore[attr-defined]
+    return module, session
 
 
 # ---- retry_with_backoff ----------------------------------------------------
@@ -157,3 +176,101 @@ class TestLogAnalyticsConnectorConstruction:
 
     def test_default_poll_interval(self):
         assert DEFAULT_POLL_INTERVAL == 30
+
+
+class TestLogAnalyticsPolling:
+    @pytest.mark.asyncio
+    @patch("sentinel_adapter.connector.Producer")
+    async def test_publishes_and_persists_checkpoint(self, producer_cls):
+        producer = MagicMock()
+        producer.flush.return_value = 0
+        producer_cls.return_value = producer
+        credential = MagicMock()
+        credential.get_token.return_value.token = "token"
+        checkpoint = MagicMock()
+        checkpoint.is_processed = AsyncMock(return_value=False)
+        checkpoint.mark_processed = AsyncMock()
+        checkpoint.save_watermark = AsyncMock()
+
+        connector = SentinelLogAnalyticsConnector(
+            workspace_id="workspace-1",
+            credential=credential,
+            kafka_bootstrap="kafka:9092",
+            checkpoint_store=checkpoint,
+        )
+        payload = {
+            "tables": [{
+                "columns": [
+                    {"name": "SystemAlertId"},
+                    {"name": "TimeGenerated"},
+                    {"name": "AlertName"},
+                    {"name": "Description"},
+                    {"name": "Severity"},
+                    {"name": "Entities"},
+                ],
+                "rows": [[
+                    "alert-1", "2026-08-20T01:02:03Z", "Suspicious login",
+                    "Unexpected authentication", "High", "[]",
+                ]],
+            }],
+        }
+        aiohttp_module, session = _mock_aiohttp(payload)
+
+        with patch.dict(sys.modules, {"aiohttp": aiohttp_module}):
+            await connector._poll_once()
+
+        url = session.post.call_args.args[0]
+        assert url.startswith("https://api.loganalytics.azure.com/")
+        query = session.post.call_args.kwargs["json"]["query"]
+        assert "Severity=AlertSeverity" in query
+        assert "SecurityIncident" in query
+        assert "IncidentName" in query
+        producer.produce.assert_called_once()
+        published = json.loads(producer.produce.call_args.kwargs["value"])
+        assert published["source_context"]["workspace_id"] == "workspace-1"
+        assert published["source_context"]["system_alert_id"] == "alert-1"
+        checkpoint.mark_processed.assert_awaited_once_with(
+            "sentinel-default", "alert-1", "2026-08-20T01:02:03Z"
+        )
+        checkpoint.save_watermark.assert_awaited_once_with(
+            "sentinel-default", "2026-08-20T01:02:03Z"
+        )
+
+    @pytest.mark.asyncio
+    @patch("sentinel_adapter.connector.Producer")
+    async def test_skips_previously_processed_alert(self, producer_cls):
+        producer = MagicMock()
+        producer.flush.return_value = 0
+        producer_cls.return_value = producer
+        credential = MagicMock()
+        credential.get_token.return_value.token = "token"
+        checkpoint = MagicMock()
+        checkpoint.is_processed = AsyncMock(return_value=True)
+        checkpoint.mark_processed = AsyncMock()
+        checkpoint.save_watermark = AsyncMock()
+
+        connector = SentinelLogAnalyticsConnector(
+            workspace_id="workspace-1",
+            credential=credential,
+            kafka_bootstrap="kafka:9092",
+            checkpoint_store=checkpoint,
+        )
+        payload = {
+            "tables": [{
+                "columns": [
+                    {"name": "SystemAlertId"}, {"name": "TimeGenerated"},
+                    {"name": "AlertName"}, {"name": "Severity"},
+                ],
+                "rows": [["alert-1", "2026-08-20T01:02:03Z", "Alert", "High"]],
+            }],
+        }
+        aiohttp_module, _ = _mock_aiohttp(payload)
+
+        with patch.dict(sys.modules, {"aiohttp": aiohttp_module}):
+            await connector._poll_once()
+
+        producer.produce.assert_not_called()
+        checkpoint.mark_processed.assert_not_awaited()
+        checkpoint.save_watermark.assert_awaited_once_with(
+            "sentinel-default", "2026-08-20T01:02:03Z"
+        )

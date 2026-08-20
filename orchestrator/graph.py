@@ -25,6 +25,13 @@ from llm_router.models import DEGRADATION_POLICIES, DegradationLevel, Degradatio
 
 logger = logging.getLogger(__name__)
 
+_INVESTIGATION_NAMESPACE = uuid.UUID("5766d71f-4814-4af0-a594-8640a6364863")
+_TERMINAL_OR_PAUSED_STATES = frozenset({
+    InvestigationState.AWAITING_HUMAN,
+    InvestigationState.CLOSED,
+    InvestigationState.FAILED,
+})
+
 
 class InvestigationGraph:
     """Executes the full investigation lifecycle as a state machine.
@@ -82,19 +89,45 @@ class InvestigationGraph:
         entities: dict[str, Any],
         alert_title: str = "",
         severity: str = "medium",
+        source_context: dict[str, Any] | None = None,
     ) -> GraphState:
         """Execute the full investigation pipeline.
 
         Returns the final GraphState.
         """
-        investigation_id = str(uuid.uuid4())
-        state = GraphState(
-            investigation_id=investigation_id,
-            alert_id=alert_id,
-            tenant_id=tenant_id,
-            entities=entities,
-            severity=severity,
-        )
+        if alert_id:
+            investigation_id = str(uuid.uuid5(
+                _INVESTIGATION_NAMESPACE,
+                f"{tenant_id}:{alert_id}",
+            ))
+        else:
+            investigation_id = str(uuid.uuid4())
+
+        state = await self._repo.load(investigation_id)
+        if state is not None and state.state in _TERMINAL_OR_PAUSED_STATES:
+            logger.info(
+                "Returning existing investigation %s for duplicate alert %s",
+                investigation_id,
+                alert_id,
+            )
+            return state
+
+        if state is None:
+            state = GraphState(
+                investigation_id=investigation_id,
+                alert_id=alert_id,
+                tenant_id=tenant_id,
+                source_context=source_context or {},
+                entities=entities,
+                severity=severity,
+            )
+        else:
+            state.decision_chain.append(DecisionEntry(
+                step="recovery",
+                agent="orchestrator",
+                action="resume_interrupted_investigation",
+                reasoning=f"Resuming persisted {state.state.value} stage after redelivery",
+            ))
 
         try:
             state = await self._execute_pipeline(state, alert_title)
@@ -133,136 +166,131 @@ class InvestigationGraph:
             self._emit_degraded(state, policy.level.value)
             return state
 
-        # Stage 1: IOC Extraction (RECEIVED → PARSING)
-        state = await self._repo.transition(
-            state, InvestigationState.PARSING,
-            agent=AgentRole.IOC_EXTRACTOR.value,
-            action="start_ioc_extraction",
-        )
-        self._emit_state_changed(state, "received", "parsing")
-        state = await self._ioc.execute(state)
+        if state.state == InvestigationState.RECEIVED:
+            state = await self._repo.transition(
+                state, InvestigationState.PARSING,
+                agent=AgentRole.IOC_EXTRACTOR.value,
+                action="start_ioc_extraction",
+            )
+            self._emit_state_changed(state, "received", "parsing")
 
-        # Stage 1.5: FP Short-Circuit (Redis-backed — available up to Level 4)
-        if self._fp is not None:
-            fp_result = await self._fp.check(state, alert_title)
-            if fp_result.matched:
-                state = self._fp.apply_shortcircuit(state, fp_result)
-                self._emit_auto_closed(state, fp_result.pattern_id, fp_result.confidence)
+        if state.state == InvestigationState.PARSING:
+            state = await self._ioc.execute(state)
+
+            if self._fp is not None:
+                fp_result = await self._fp.check(state, alert_title)
+                if fp_result.matched:
+                    state = self._fp.apply_shortcircuit(state, fp_result)
+                    self._emit_auto_closed(
+                        state, fp_result.pattern_id, fp_result.confidence
+                    )
+                    return state
+
+            if policy.level.value == "search_only":
+                state.state = InvestigationState.AWAITING_HUMAN
+                state.requires_human_approval = True
+                state.decision_chain.append(DecisionEntry(
+                    step="degradation_check",
+                    agent="orchestrator",
+                    action="search_only_mode",
+                    reasoning="LLM and vector DB degraded — deterministic match only; escalating to analyst",
+                ))
+                self._emit_degraded(state, policy.level.value)
                 return state
 
-        # Level 4 — SEARCH_ONLY: exact-match only; skip vector search + LLM reasoning
-        if policy.level.value == "search_only":
-            state.state = InvestigationState.AWAITING_HUMAN
-            state.requires_human_approval = True
-            state.decision_chain.append(DecisionEntry(
-                step="degradation_check",
-                agent="orchestrator",
-                action="search_only_mode",
-                reasoning="LLM and vector DB degraded — deterministic match only; escalating to analyst",
-            ))
-            self._emit_degraded(state, policy.level.value)
-            return state
-
-        # Stage 2: Parallel Enrichment (PARSING → ENRICHING)
-        state = await self._repo.transition(
-            state, InvestigationState.ENRICHING,
-            agent="graph",
-            action="start_enrichment",
-        )
-        self._emit_state_changed(state, "parsing", "enriching")
-
-        # Level 3 — DETERMINISTIC_ONLY: run context enricher (Redis/PG) only; skip vector/graph
-        if not policy.vector_search_available or not policy.graph_reasoning_available:
-            enricher_task = self._enricher.execute(state)
-            # CTEM and ATLAS require vector/graph — skip them in deterministic mode
-            results = await asyncio.gather(enricher_task, return_exceptions=True)
-            state = self._merge_parallel_results(state, [
-                results[0],
-                Exception("skipped: deterministic_only mode"),
-                Exception("skipped: deterministic_only mode"),
-            ])
-            state.decision_chain.append(DecisionEntry(
-                step="degradation_check",
-                agent="orchestrator",
-                action="deterministic_only_mode",
-                reasoning=f"Degradation level {policy.level.value}: vector/graph search skipped",
-            ))
-            self._emit_degraded(state, policy.level.value)
-        else:
-            enricher_task = self._enricher.execute(state)
-            ctem_task = self._ctem.execute(state)
-            atlas_task = self._atlas.execute(state)
-
-            results = await asyncio.gather(
-                enricher_task, ctem_task, atlas_task,
-                return_exceptions=True,
+            state = await self._repo.transition(
+                state, InvestigationState.ENRICHING,
+                agent="graph",
+                action="start_enrichment",
             )
-            state = self._merge_parallel_results(state, results)
+            self._emit_state_changed(state, "parsing", "enriching")
 
-        self._emit_enriched(state)
+        if state.state == InvestigationState.ENRICHING:
+            if not policy.vector_search_available or not policy.graph_reasoning_available:
+                enricher_task = self._enricher.execute(state)
+                results = await asyncio.gather(enricher_task, return_exceptions=True)
+                state = self._merge_parallel_results(state, [
+                    results[0],
+                    Exception("skipped: deterministic_only mode"),
+                    Exception("skipped: deterministic_only mode"),
+                ])
+                state.decision_chain.append(DecisionEntry(
+                    step="degradation_check",
+                    agent="orchestrator",
+                    action="deterministic_only_mode",
+                    reasoning=f"Degradation level {policy.level.value}: vector/graph search skipped",
+                ))
+                self._emit_degraded(state, policy.level.value)
+            else:
+                results = await asyncio.gather(
+                    self._enricher.execute(state),
+                    self._ctem.execute(state),
+                    self._atlas.execute(state),
+                    return_exceptions=True,
+                )
+                state = self._merge_parallel_results(state, results)
 
-        # Level 3 — DETERMINISTIC_ONLY: skip LLM reasoning; escalate to human
-        if not policy.llm_available:
-            state.state = InvestigationState.AWAITING_HUMAN
-            state.requires_human_approval = True
-            state.decision_chain.append(DecisionEntry(
-                step="degradation_check",
-                agent="orchestrator",
-                action="no_llm_escalation",
-                reasoning="LLM unavailable — IOC/FP matching complete; escalating to analyst for reasoning",
-            ))
-            self._emit_escalated(state)
-            return state
+            self._emit_enriched(state)
 
-        # Stage 3: Reasoning (ENRICHING → REASONING)
-        state = await self._repo.transition(
-            state, InvestigationState.REASONING,
-            agent=AgentRole.REASONING_AGENT.value,
-            action="start_reasoning",
-        )
-        self._emit_state_changed(state, "enriching", "reasoning")
-        state = await self._reasoning.execute(state)
+            if not policy.llm_available:
+                state.state = InvestigationState.AWAITING_HUMAN
+                state.requires_human_approval = True
+                state.decision_chain.append(DecisionEntry(
+                    step="degradation_check",
+                    agent="orchestrator",
+                    action="no_llm_escalation",
+                    reasoning="LLM unavailable — IOC/FP matching complete; escalating to analyst for reasoning",
+                ))
+                self._emit_escalated(state)
+                return state
 
-        # Trust constraint: if ALL ATLAS detections are untrusted, force human review
-        state = self._apply_trust_constraint(state)
-
-        # Stage 4: Branch — RESPONDING or AWAITING_HUMAN
-        if state.state == InvestigationState.AWAITING_HUMAN:
-            self._emit_escalated(state)
-            await self._repo.save(state)
-            return state
-
-        # Stage 5: Shadow mode check — if active, log but don't execute
-        if self._shadow is not None and await self._shadow.is_shadow_active(
-            state.tenant_id
-        ):
-            state.decision_chain.append(DecisionEntry(
-                step="shadow_mode",
-                agent="orchestrator",
-                action="shadow_decision_logged",
-                reasoning="Shadow mode active — decision logged, not executed",
-                confidence=state.confidence,
-            ))
-            await self._shadow.record_shadow_decision(
-                tenant_id=state.tenant_id,
-                rule_family=state.classification or "",
-                shadow_decision=state.classification or "unknown",
-                shadow_confidence=state.confidence,
-                investigation_id=state.investigation_id,
+            state = await self._repo.transition(
+                state, InvestigationState.REASONING,
+                agent=AgentRole.REASONING_AGENT.value,
+                action="start_reasoning",
             )
-            state.state = InvestigationState.AWAITING_HUMAN
-            state.requires_human_approval = True
-            self._emit_escalated(state)
-            return state
+            self._emit_state_changed(state, "enriching", "reasoning")
 
-        # Stage 6: Response (RESPONDING → CLOSED)
-        state = await self._repo.transition(
-            state, InvestigationState.RESPONDING,
-            agent=AgentRole.RESPONSE_AGENT.value,
-            action="start_response",
-        )
-        self._emit_state_changed(state, "reasoning", "responding")
-        state = await self._response.execute(state)
+        if state.state == InvestigationState.REASONING:
+            state = await self._reasoning.execute(state)
+            state = self._apply_trust_constraint(state)
+
+            if state.state == InvestigationState.AWAITING_HUMAN:
+                self._emit_escalated(state)
+                await self._repo.save(state)
+                return state
+
+            if self._shadow is not None and await self._shadow.is_shadow_active(
+                state.tenant_id
+            ):
+                state.decision_chain.append(DecisionEntry(
+                    step="shadow_mode",
+                    agent="orchestrator",
+                    action="shadow_decision_logged",
+                    reasoning="Shadow mode active — decision logged, not executed",
+                    confidence=state.confidence,
+                ))
+                await self._shadow.record_shadow_decision(
+                    tenant_id=state.tenant_id,
+                    rule_family=state.classification or "",
+                    shadow_decision=state.classification or "unknown",
+                    shadow_confidence=state.confidence,
+                    investigation_id=state.investigation_id,
+                )
+                state.state = InvestigationState.AWAITING_HUMAN
+                state.requires_human_approval = True
+                self._emit_escalated(state)
+                return state
+
+            state = await self._repo.transition(
+                state, InvestigationState.RESPONDING,
+                agent=AgentRole.RESPONSE_AGENT.value,
+                action="start_response",
+            )
+            self._emit_state_changed(state, "reasoning", "responding")
+
+        if state.state == InvestigationState.RESPONDING:
+            state = await self._response.execute(state)
 
         return state
 

@@ -298,15 +298,11 @@ def main() -> None:
 
     kafka_bootstrap = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     postgres_dsn = os.environ.get("POSTGRES_DSN", "")
+    if not postgres_dsn:
+        raise RuntimeError("POSTGRES_DSN is required")
 
-    # Repository
-    db = None
-    if postgres_dsn:
-        try:
-            from shared.db.postgres import PostgresClient
-            db = PostgresClient(dsn=postgres_dsn)
-        except Exception:
-            logger.warning("Postgres unavailable — running without persistence")
+    from shared.db.postgres import PostgresClient
+    db = PostgresClient(dsn=postgres_dsn, min_size=1, max_size=10)
 
     repo = CTEMRepository(postgres_client=db)
     service = CTEMNormaliserService(repository=repo)
@@ -314,6 +310,12 @@ def main() -> None:
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    loop.run_until_complete(db.connect())
+    from shared.worker_health import WorkerHealthServer
+    health = WorkerHealthServer(
+        "ctem-normaliser", int(os.environ.get("HEALTH_PORT", "8083"))
+    )
+    health.start()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -322,9 +324,12 @@ def main() -> None:
             signal.signal(sig, lambda *_: runner.stop())
 
     try:
+        health.mark_ready()
         loop.run_until_complete(runner.run())
     finally:
+        health.close()
         runner.close()
+        loop.run_until_complete(db.close())
         loop.close()
         logger.info("CTEM normaliser service stopped")
 

@@ -69,12 +69,12 @@ variable "kafka_instance_type" {
 variable "ecs_services" {
   description = "Map of ECS service definitions"
   type = map(object({
-    cpu        = number
-    memory     = number
-    port       = number
-    count      = number
-    command    = list(string)
-    public     = bool
+    cpu     = number
+    memory  = number
+    port    = number
+    count   = number
+    command = list(string)
+    public  = bool
   }))
   default = {
     dashboard = {

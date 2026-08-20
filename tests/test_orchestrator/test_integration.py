@@ -46,11 +46,17 @@ def _make_mock_redis():
 def _make_mock_postgres():
     pg = AsyncMock()
     pg.execute = AsyncMock()
-    pg.fetch_one = AsyncMock(return_value={
-        "risk_score": 0.65,
-        "risk_state": "medium",
-        "anomalies": ["unusual_login_time"],
-    })
+
+    async def fetch_one(query, *args):
+        if "investigation_state" in query:
+            return None
+        return {
+            "risk_score": 0.65,
+            "risk_state": "medium",
+            "anomalies": ["unusual_login_time"],
+        }
+
+    pg.fetch_one = AsyncMock(side_effect=fetch_one)
     pg.fetch_many = AsyncMock(return_value=[])
     return pg
 
@@ -436,7 +442,7 @@ class TestApprovalGateWiring:
             alert_id="ALERT-F1",
         )
         state_json = state.model_dump()
-        postgres.fetch_one = AsyncMock(return_value={"graphstate_json": state_json})
+        postgres.fetch_one = AsyncMock(return_value={"graph_state": state_json})
 
         graph = _build_graph({})
         graph._repo = repo
@@ -462,7 +468,7 @@ class TestApprovalGateWiring:
             alert_id="ALERT-F1M",
         )
         state_json = state.model_dump()
-        postgres.fetch_one = AsyncMock(return_value={"graphstate_json": state_json})
+        postgres.fetch_one = AsyncMock(return_value={"graph_state": state_json})
 
         graph = _build_graph({})
         graph._repo = repo
@@ -488,7 +494,7 @@ class TestApprovalGateWiring:
             alert_id="ALERT-F1A",
         )
         state_json = state.model_dump()
-        postgres.fetch_one = AsyncMock(return_value={"graphstate_json": state_json})
+        postgres.fetch_one = AsyncMock(return_value={"graph_state": state_json})
 
         graph = _build_graph({})
         graph._repo = repo

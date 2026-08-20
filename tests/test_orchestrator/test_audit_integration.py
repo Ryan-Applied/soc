@@ -15,6 +15,7 @@ from orchestrator.fp_shortcircuit import FPMatchResult, FPShortCircuit
 def _make_graph(audit_producer=None):
     """Create InvestigationGraph with mocked agents and optional AuditProducer."""
     repo = AsyncMock()
+    repo.load = AsyncMock(return_value=None)
     repo.transition = AsyncMock(side_effect=lambda state, new_state, **kw: _set_state(state, new_state))
     repo.save = AsyncMock()
 
@@ -84,6 +85,7 @@ class TestOrchestratorAudit:
         fp.apply_shortcircuit = MagicMock(side_effect=lambda s, m: _fp_close(s, m))
 
         repo = AsyncMock()
+        repo.load = AsyncMock(return_value=None)
         repo.transition = AsyncMock(side_effect=lambda state, new_state, **kw: _set_state(state, new_state))
         repo.save = AsyncMock()
 
@@ -130,6 +132,7 @@ class TestOrchestratorAudit:
         """alert.escalated is emitted when investigation reaches AWAITING_HUMAN."""
         audit = MagicMock()
         repo = AsyncMock()
+        repo.load = AsyncMock(return_value=None)
         repo.transition = AsyncMock(side_effect=lambda state, new_state, **kw: _set_state(state, new_state))
         repo.save = AsyncMock()
 

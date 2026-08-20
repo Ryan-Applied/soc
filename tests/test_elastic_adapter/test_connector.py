@@ -77,7 +77,8 @@ class TestCanonicalToBytes:
 class TestElasticConnectorPolling:
     """Test the polling mechanism."""
 
-    def test_poll_once_calls_elasticsearch(self):
+    @pytest.mark.asyncio
+    async def test_poll_once_calls_elasticsearch(self):
         """_poll_once sends a POST to .siem-signals-* index."""
         connector = ElasticConnector.__new__(ElasticConnector)
         connector.es_host = "http://es:9200"
@@ -88,13 +89,14 @@ class TestElasticConnectorPolling:
 
         mock_mod, mock_session = _make_mock_aiohttp({"hits": {"hits": []}})
         with patch.dict(sys.modules, {"aiohttp": mock_mod}):
-            asyncio.get_event_loop().run_until_complete(connector._poll_once())
+            await connector._poll_once()
 
         mock_session.post.assert_called_once()
         call_url = mock_session.post.call_args[0][0]
         assert ".siem-signals-*/_search" in call_url
 
-    def test_poll_publishes_to_kafka(self):
+    @pytest.mark.asyncio
+    async def test_poll_publishes_to_kafka(self):
         """Valid hits are published to the alerts.raw topic."""
         connector = ElasticConnector.__new__(ElasticConnector)
         connector.es_host = "http://es:9200"
@@ -118,12 +120,13 @@ class TestElasticConnectorPolling:
 
         mock_mod, mock_session = _make_mock_aiohttp({"hits": {"hits": [hit]}})
         with patch.dict(sys.modules, {"aiohttp": mock_mod}):
-            asyncio.get_event_loop().run_until_complete(connector._poll_once())
+            await connector._poll_once()
 
         connector.producer.produce.assert_called_once()
         assert connector.producer.produce.call_args[1]["topic"] == "alerts.raw"
 
-    def test_retry_on_failure(self):
+    @pytest.mark.asyncio
+    async def test_retry_on_failure(self):
         """retry_with_backoff retries on transient failures."""
         call_count = 0
 
@@ -136,8 +139,6 @@ class TestElasticConnectorPolling:
 
         from sentinel_adapter.connector import retry_with_backoff
 
-        result = asyncio.get_event_loop().run_until_complete(
-            retry_with_backoff(flaky, max_retries=3, base_delay=0.01)
-        )
+        result = await retry_with_backoff(flaky, max_retries=3, base_delay=0.01)
         assert result == "ok"
         assert call_count == 3

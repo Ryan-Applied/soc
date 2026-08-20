@@ -61,7 +61,9 @@ class IOCExtractorAgent:
         # Enrich from Redis
         enriched: list[dict[str, Any]] = []
         for ioc in iocs:
-            cached = await self._redis.get_ioc(ioc["type"], ioc["value"])
+            cached = await self._redis.get_ioc(
+                state.tenant_id, ioc["type"], ioc["value"]
+            )
             state.queries_executed += 1
             if cached:
                 enriched.append({**ioc, **cached})

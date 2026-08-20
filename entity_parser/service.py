@@ -207,6 +207,11 @@ def main() -> None:
 
     kafka_bootstrap = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     svc = EntityParserService(kafka_bootstrap=kafka_bootstrap)
+    from shared.worker_health import WorkerHealthServer
+    health = WorkerHealthServer(
+        "entity-parser", int(os.environ.get("HEALTH_PORT", "8082"))
+    )
+    health.start()
 
     # Audit producer (optional)
     try:
@@ -224,8 +229,10 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _shutdown)
 
     try:
+        health.mark_ready()
         svc.run()
     finally:
+        health.close()
         svc.close()
         logger.info("Entity parser service stopped")
 

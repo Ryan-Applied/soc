@@ -1,8 +1,15 @@
 # AWS Secrets Manager for sensitive configuration
 
-variable "name_prefix"       { type = string }
-variable "anthropic_api_key" { type = string; sensitive = true }
-variable "db_password"       { type = string; sensitive = true }
+variable "name_prefix" { type = string }
+variable "anthropic_api_key" {
+  type      = string
+  sensitive = true
+}
+
+variable "db_password" {
+  type      = string
+  sensitive = true
+}
 
 resource "aws_secretsmanager_secret" "app" {
   name                    = "${var.name_prefix}/app-secrets"

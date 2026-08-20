@@ -20,11 +20,11 @@ class TestIngestAdapterABC:
         adapter = SentinelAdapter()
         assert adapter.source_name() == "sentinel"
 
-    def test_subscribe_raises_not_implemented(self):
+    @pytest.mark.asyncio
+    async def test_subscribe_raises_not_implemented(self):
         adapter = SentinelAdapter()
         with pytest.raises(NotImplementedError):
-            import asyncio
-            asyncio.get_event_loop().run_until_complete(adapter.subscribe())
+            await adapter.subscribe()
 
 
 # ---- heartbeat handling ----------------------------------------------------

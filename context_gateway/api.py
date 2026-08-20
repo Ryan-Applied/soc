@@ -25,6 +25,7 @@ class CompletionRequest(BaseModel):
     user_content: str
     output_schema: dict[str, Any] | None = None
     tenant_id: str = "default"
+    use_extended_thinking: bool = False
 
 
 class CompletionResponse(BaseModel):
@@ -49,22 +50,24 @@ class SpendResponse(BaseModel):
 
 _gateway: Any = None
 _spend_guard: Any = None
+_db: Any = None
+_ready = False
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Initialize gateway dependencies on startup."""
-    global _gateway, _spend_guard
+    global _gateway, _spend_guard, _db, _ready
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
-        logger.warning("ANTHROPIC_API_KEY not set — gateway will reject requests")
+        raise RuntimeError("ANTHROPIC_API_KEY is required")
 
     from context_gateway.anthropic_client import AluskortAnthropicClient
     from context_gateway.gateway import ContextGateway
     from context_gateway.spend_guard import SpendGuard
 
-    client = AluskortAnthropicClient(api_key=api_key) if api_key else None
+    client = AluskortAnthropicClient(api_key=api_key)
     _spend_guard = SpendGuard()
 
     # Optionally load taxonomy IDs from Postgres
@@ -74,15 +77,16 @@ async def lifespan(application: FastAPI):
     if postgres_dsn:
         try:
             from shared.db.postgres import PostgresClient
-            db = PostgresClient(dsn=postgres_dsn)
-            await db.connect()
-            known_ids = await db.get_technique_ids()
-            taxonomy_version = await db.get_taxonomy_version()
+            _db = PostgresClient(dsn=postgres_dsn)
+            await _db.connect()
+            known_ids = await _db.get_technique_ids()
+            taxonomy_version = await _db.get_taxonomy_version()
             logger.info(
                 "Loaded %d taxonomy IDs (version=%s)", len(known_ids), taxonomy_version,
             )
         except Exception:
             logger.warning("Failed to load taxonomy from Postgres", exc_info=True)
+            _db = None
 
     _gateway = ContextGateway(
         client=client,
@@ -90,13 +94,17 @@ async def lifespan(application: FastAPI):
         known_technique_ids=known_ids if known_ids else None,
         taxonomy_version=taxonomy_version,
     )
+    _ready = True
     logger.info("Context Gateway initialized")
 
     yield
 
     # Cleanup
-    if client is not None:
-        await client.close()
+    _ready = False
+    await client.close()
+    if _db is not None:
+        await _db.close()
+        _db = None
 
 
 app = FastAPI(
@@ -109,6 +117,13 @@ app = FastAPI(
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": "context-gateway"}
+
+
+@app.get("/ready")
+async def ready() -> dict[str, str]:
+    if not _ready:
+        raise HTTPException(503, "Context Gateway is not ready")
+    return {"status": "ready", "service": "context-gateway"}
 
 
 @app.post("/v1/complete", response_model=CompletionResponse)
@@ -126,6 +141,7 @@ async def complete(req: CompletionRequest) -> CompletionResponse:
         user_content=req.user_content,
         output_schema=req.output_schema,
         tenant_id=req.tenant_id,
+        use_extended_thinking=req.use_extended_thinking,
     )
 
     try:

@@ -1,9 +1,9 @@
 # Amazon MSK (Managed Kafka) — event streaming
 
-variable "name_prefix"        { type = string }
-variable "vpc_id"             { type = string }
+variable "name_prefix" { type = string }
+variable "vpc_id" { type = string }
 variable "private_subnet_ids" { type = list(string) }
-variable "instance_type"      { type = string }
+variable "instance_type" { type = string }
 variable "ecs_security_group" { type = string }
 
 resource "aws_security_group" "msk" {

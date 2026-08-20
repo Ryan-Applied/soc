@@ -12,6 +12,11 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from services.dashboard.app import templates
+from services.dashboard.approval_store import (
+    ApprovalConflictError,
+    ApprovalNotFoundError,
+    record_approval_decision,
+)
 from services.dashboard.deps import get_db, get_repo
 from shared.schemas.investigation import InvestigationState
 
@@ -82,8 +87,29 @@ async def approval_detail_partial(request: Request, investigation_id: str) -> HT
 
 
 @router.post("/api/investigations/{investigation_id}/approve")
-async def approve_investigation(investigation_id: str) -> dict[str, str]:
+async def approve_investigation(
+    request: Request, investigation_id: str
+) -> dict[str, str]:
     """Approve an investigation — transition to RESPONDING."""
+    db = get_db()
+    if db is not None and hasattr(db, "transaction"):
+        try:
+            state = await record_approval_decision(
+                db,
+                investigation_id=investigation_id,
+                approved=True,
+                actor_id=getattr(request.state, "user_id", "unknown"),
+                actor_role=getattr(request.state, "user_role", "unknown"),
+            )
+        except ApprovalNotFoundError:
+            raise HTTPException(status_code=404, detail="Investigation not found")
+        except ApprovalConflictError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Investigation is in state {exc}, not awaiting_human",
+            )
+        return {"status": "approved", "new_state": state.state.value}
+
     repo = get_repo()
     state = await repo.load(investigation_id)
     if state is None:
@@ -99,33 +125,40 @@ async def approve_investigation(investigation_id: str) -> dict[str, str]:
         InvestigationState.RESPONDING,
         agent="dashboard_analyst",
         action="approval.granted",
-        details={"source": "dashboard"},
+        details={
+            "source": "dashboard",
+            "actor_id": getattr(request.state, "user_id", "unknown"),
+            "actor_role": getattr(request.state, "user_role", "unknown"),
+        },
     )
-
-    # Emit audit event
-    try:
-        db = get_db()
-        if db is not None:
-            await db.execute(
-                """
-                INSERT INTO audit_records (audit_id, tenant_id, event_type, event_category,
-                                           investigation_id, payload, timestamp)
-                VALUES (gen_random_uuid()::text, $1, $2, $3, $4, '{}'::jsonb, NOW())
-                """,
-                state.tenant_id,
-                "approval.granted",
-                "approval",
-                investigation_id,
-            )
-    except Exception as exc:
-        logger.warning("Failed to emit audit event: %s", exc)
 
     return {"status": "approved", "new_state": "responding"}
 
 
 @router.post("/api/investigations/{investigation_id}/reject")
-async def reject_investigation(investigation_id: str) -> dict[str, str]:
+async def reject_investigation(
+    request: Request, investigation_id: str
+) -> dict[str, str]:
     """Reject an investigation — transition to CLOSED."""
+    db = get_db()
+    if db is not None and hasattr(db, "transaction"):
+        try:
+            state = await record_approval_decision(
+                db,
+                investigation_id=investigation_id,
+                approved=False,
+                actor_id=getattr(request.state, "user_id", "unknown"),
+                actor_role=getattr(request.state, "user_role", "unknown"),
+            )
+        except ApprovalNotFoundError:
+            raise HTTPException(status_code=404, detail="Investigation not found")
+        except ApprovalConflictError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Investigation is in state {exc}, not awaiting_human",
+            )
+        return {"status": "rejected", "new_state": state.state.value}
+
     repo = get_repo()
     state = await repo.load(investigation_id)
     if state is None:
@@ -141,25 +174,11 @@ async def reject_investigation(investigation_id: str) -> dict[str, str]:
         InvestigationState.CLOSED,
         agent="dashboard_analyst",
         action="approval.denied",
-        details={"source": "dashboard"},
+        details={
+            "source": "dashboard",
+            "actor_id": getattr(request.state, "user_id", "unknown"),
+            "actor_role": getattr(request.state, "user_role", "unknown"),
+        },
     )
-
-    # Emit audit event
-    try:
-        db = get_db()
-        if db is not None:
-            await db.execute(
-                """
-                INSERT INTO audit_records (audit_id, tenant_id, event_type, event_category,
-                                           investigation_id, payload, timestamp)
-                VALUES (gen_random_uuid()::text, $1, $2, $3, $4, '{}'::jsonb, NOW())
-                """,
-                state.tenant_id,
-                "approval.denied",
-                "approval",
-                investigation_id,
-            )
-    except Exception as exc:
-        logger.warning("Failed to emit audit event: %s", exc)
 
     return {"status": "rejected", "new_state": "closed"}

@@ -36,7 +36,7 @@ class EventTaxonomy(str, Enum):
     ROUTING_TIER_SELECTED = "routing.tier_selected"
     ROUTING_PROVIDER_FAILOVER = "routing.provider_failover"
 
-    # Action events (11)
+    # Action events (12)
     RESPONSE_PREPARED = "response.prepared"
     RESPONSE_EXECUTED = "response.executed"
     RESPONSE_ROLLED_BACK = "response.rolled_back"
@@ -48,6 +48,8 @@ class EventTaxonomy(str, Enum):
     KNOWLEDGE_INDEXED = "knowledge.indexed"
     EMBEDDING_REINDEXED = "embedding.reindexed"
     RESPONSE_GENERATED = "response.generated"
+    # FR-CSM-004: Analyst feedback on investigation outcome
+    ANALYST_FEEDBACK_SUBMITTED = "analyst.feedback.submitted"
 
     # Approval events (8)
     APPROVAL_REQUESTED = "approval.requested"
@@ -59,7 +61,7 @@ class EventTaxonomy(str, Enum):
     FP_PATTERN_REVOKED = "fp_pattern.revoked"
     SHADOW_GO_LIVE_APPROVED = "shadow.go_live_approved"
 
-    # Security events (8)
+    # Security events (7)
     INJECTION_DETECTED = "injection.detected"
     INJECTION_QUARANTINED = "injection.quarantined"
     TECHNIQUE_QUARANTINED = "technique.quarantined"
@@ -68,8 +70,6 @@ class EventTaxonomy(str, Enum):
     SPEND_HARD_LIMIT = "spend.hard_limit"
     # FR-ATL-006: Safety guard — FP attempt blocked on safety-critical alert
     FP_SAFETY_BLOCK = "fp.safety_block"
-    # FR-CSM-004: Analyst feedback on investigation outcome
-    ANALYST_FEEDBACK_SUBMITTED = "analyst.feedback.submitted"
 
     # Canary / shadow events (3)
     CANARY_PROMOTED = "canary.promoted"
@@ -113,6 +113,7 @@ EVENT_CATEGORY_MAP: dict[EventTaxonomy, EventCategory] = {
     EventTaxonomy.KNOWLEDGE_INDEXED: EventCategory.ACTION,
     EventTaxonomy.EMBEDDING_REINDEXED: EventCategory.ACTION,
     EventTaxonomy.RESPONSE_GENERATED: EventCategory.ACTION,
+    EventTaxonomy.ANALYST_FEEDBACK_SUBMITTED: EventCategory.ACTION,
     # Approval events
     EventTaxonomy.APPROVAL_REQUESTED: EventCategory.APPROVAL,
     EventTaxonomy.APPROVAL_GRANTED: EventCategory.APPROVAL,
@@ -130,7 +131,6 @@ EVENT_CATEGORY_MAP: dict[EventTaxonomy, EventCategory] = {
     EventTaxonomy.SPEND_SOFT_LIMIT: EventCategory.SECURITY,
     EventTaxonomy.SPEND_HARD_LIMIT: EventCategory.SECURITY,
     EventTaxonomy.FP_SAFETY_BLOCK: EventCategory.SECURITY,
-    EventTaxonomy.ANALYST_FEEDBACK_SUBMITTED: EventCategory.ACTION,
     # Canary / shadow events
     EventTaxonomy.CANARY_PROMOTED: EventCategory.DECISION,
     EventTaxonomy.CANARY_ROLLED_BACK: EventCategory.DECISION,

@@ -60,6 +60,23 @@ class SentinelAdapter(IngestAdapter):
             entities_raw=raw_event.get("Entities", "[]"),
             product=raw_event.get("ProductName", ""),
             tenant_id=raw_event.get("TenantId", "default"),
+            source_context={
+                key: value
+                for key, value in {
+                    "connector_id": raw_event.get("_aluskort_connector_id"),
+                    "workspace_id": raw_event.get("_aluskort_workspace_id"),
+                    "subscription_id": raw_event.get("_aluskort_subscription_id"),
+                    "resource_group": raw_event.get("_aluskort_resource_group"),
+                    "workspace_name": raw_event.get("_aluskort_workspace_name"),
+                    "system_alert_id": raw_event.get("SystemAlertId"),
+                    "vendor_original_id": raw_event.get("VendorOriginalId"),
+                    "incident_name": raw_event.get("IncidentName"),
+                    "incident_number": raw_event.get("IncidentNumber"),
+                    "incident_url": raw_event.get("IncidentUrl"),
+                    "provider_incident_id": raw_event.get("ProviderIncidentId"),
+                }.items()
+                if value not in (None, "")
+            },
             raw_payload=raw_event,
         )
 

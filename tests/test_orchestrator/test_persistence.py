@@ -59,14 +59,14 @@ class TestSave:
         await repo.save(sample_state)
         mock_db.execute.assert_called_once()
         args = mock_db.execute.call_args[0]
-        assert "INSERT INTO investigations" in args[0]
+        assert "INSERT INTO investigation_state" in args[0]
         assert args[1] == "inv-test-001"
         assert args[2] == "alert-001"
         assert args[3] == "tenant-A"
         assert args[4] == "received"
 
     @pytest.mark.asyncio
-    async def test_save_includes_graphstate_json(self, repo, mock_db, sample_state):
+    async def test_save_includes_graph_state(self, repo, mock_db, sample_state):
         await repo.save(sample_state)
         args = mock_db.execute.call_args[0]
         state_json = args[5]
@@ -83,7 +83,7 @@ class TestLoad:
     @pytest.mark.asyncio
     async def test_load_returns_graphstate(self, repo, mock_db, sample_state):
         mock_db.fetch_one.return_value = {
-            "graphstate_json": sample_state.model_dump()
+            "graph_state": sample_state.model_dump()
         }
         result = await repo.load("inv-test-001")
         assert result is not None
@@ -93,7 +93,7 @@ class TestLoad:
     @pytest.mark.asyncio
     async def test_load_handles_json_string(self, repo, mock_db, sample_state):
         mock_db.fetch_one.return_value = {
-            "graphstate_json": sample_state.model_dump_json()
+            "graph_state": sample_state.model_dump_json()
         }
         result = await repo.load("inv-test-001")
         assert result is not None

@@ -97,6 +97,28 @@ export ANTHROPIC_API_KEY=sk-ant-...
 docker-compose --profile services up -d
 ```
 
+### 3. Enable Microsoft Sentinel Ingestion
+
+Copy `.env.example` to `.env`; set the Sentinel workspace ID, subscription,
+resource group, workspace name, and Microsoft Entra identity variables. Set
+`DASHBOARD_ENTRA_CLIENT_ID` to the dashboard API app registration and define
+the `Aluskort.Analyst`, `Aluskort.SeniorAnalyst`, and `Aluskort.Admin` app
+roles. Then start the application and Sentinel profiles:
+
+```bash
+docker compose --profile services --profile sentinel up -d
+curl --fail http://localhost:8032/ready
+curl --fail http://localhost:8033/ready
+```
+
+The polling connector reads Sentinel `SecurityAlert` records through the Azure
+Monitor Log Analytics API, publishes canonical alerts to `alerts.raw`, and
+stores its durable watermark and deduplication state in PostgreSQL.
+After an authorised analyst approves an investigation, the write-back worker
+uses a transactional outbox to add one deterministic summary comment and the
+`ALUSKORT-Investigated` label to the originating incident. The Azure identity
+must be allowed to read/update Sentinel incidents and create incident comments.
+
 ### 3. Run Tests
 
 ```bash
@@ -111,6 +133,8 @@ pytest tests/ -v
 | Dashboard | 8080 | `http://localhost:8080` |
 | Context Gateway | 8030 | `http://localhost:8030` |
 | LLM Router | 8031 | `http://localhost:8031` |
+| Sentinel Adapter | 8032 | `http://localhost:8032` |
+| Sentinel Write-back | 8033 | `http://localhost:8033` |
 | PostgreSQL | 5432 | `postgresql://aluskort:localdev@localhost:5432/aluskort` |
 | Redis | 6379 | `redis://localhost:6379` |
 | Kafka (Redpanda) | 9092 | `localhost:9092` |
@@ -225,7 +249,7 @@ terraform apply -var-file=terraform.tfvars
 Migrations run automatically on first `docker-compose up` via the Postgres init directory. For production:
 
 ```bash
-# Migrations are in infra/migrations/ (001-013)
+# Migrations are in infra/migrations/ (001-019)
 # Applied in order by filename during container init
 ls infra/migrations/
 ```
@@ -243,14 +267,17 @@ ls infra/migrations/
 | 011 | Dashboard sessions |
 | 012 | Connector configuration |
 | 013 | LLM providers and models |
+| 014–017 | TI chunks, analyst feedback, tenant spend caps, organisation assets |
+| 018 | Durable Sentinel polling checkpoints and deduplication |
+| 019 | Durable analyst approvals and Sentinel write-back outbox |
 
 ## CI/CD
 
 GitHub Actions pipeline (`.github/workflows/ci-cd.yml`):
 
-- **Test** — Python 3.12, pytest with coverage (90% threshold), runs against Postgres 16 + Redis 7
+- **Test** — Python 3.12, full production-tree branch coverage (62.5% baseline, 85% pilot target), Postgres 16 + Redis 7
+- **Validate** — Docker Compose resolution and Terraform formatting/syntax
 - **Build** — Docker image build and push to GHCR
-- **Deploy** — ECS service update (on push to main)
 
 ## Documentation
 

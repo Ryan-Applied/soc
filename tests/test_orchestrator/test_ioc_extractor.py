@@ -79,6 +79,7 @@ class TestIOCExtraction:
     async def test_queries_redis_per_ioc(self, agent, state, mock_redis):
         await agent.execute(state)
         assert mock_redis.get_ioc.call_count == 3
+        mock_redis.get_ioc.assert_any_await("tenant-A", "ip", "10.0.0.1")
 
     @pytest.mark.asyncio
     async def test_enriches_from_redis(self, agent, state, mock_redis):
