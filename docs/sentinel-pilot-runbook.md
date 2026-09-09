@@ -36,12 +36,23 @@ Populate `.env` from `.env.example`, including:
 
 ## Start and verify
 
+Before starting, confirm `.env` exists and every required value above is
+populated. `docker compose config --quiet` validates the resolved Compose file
+without displaying secrets.
+
 ```bash
+test -f .env
+docker compose --profile services --profile sentinel config --quiet
 docker compose --profile services --profile sentinel up -d --build
 curl --fail http://localhost:8030/ready
 curl --fail http://localhost:8032/ready
 curl --fail http://localhost:8033/ready
 ```
+
+The Sentinel adapter remains unready until its initial authenticated Log
+Analytics query succeeds. The write-back service validates its Azure credential
+during startup. A `503` at either endpoint is therefore a real pilot blocker,
+not a warm-up success state.
 
 Use a non-production Sentinel analytics rule or other approved synthetic source
 to create a uniquely tagged alert. Confirm, in order:

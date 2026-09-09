@@ -335,13 +335,15 @@ Published by CTEM Normaliser. Schema: `CTEMExposure`
 
 ## Authentication Headers
 
-### Dashboard (MVP)
+### Dashboard (Local Development Only)
 
 | Header | Value | Description |
 |--------|-------|-------------|
 | `X-User-Role` | `analyst`, `senior_analyst`, `admin` | User role for RBAC |
 
-When no header is present, MVP mode defaults to `admin`. Production deployment will use OIDC tokens.
+Header authentication must be explicitly selected for local development, and a
+valid role is required. Production requires a Microsoft Entra bearer token and
+rejects missing tokens; it never defaults to `admin`.
 
 ### Inter-Service (Production)
 

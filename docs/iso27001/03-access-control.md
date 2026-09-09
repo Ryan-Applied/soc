@@ -116,7 +116,7 @@ Higher roles inherit all permissions of lower roles.
 
 ### 4.1 External User Authentication
 
-#### 4.1.1 Current Implementation (MVP)
+#### 4.1.1 Local Development Authentication
 
 | Aspect | Implementation |
 |---|---|
@@ -126,29 +126,23 @@ Higher roles inherit all permissions of lower roles.
 | User identity | `X-User-Id: <uuid>` |
 | Tenant identity | `X-Tenant-Id: <uuid>` |
 | Transport security | TLS 1.3 (external); header injection mitigated by gateway stripping |
-| Limitations | Header-based; relies on trusted proxy; not suitable for production without gateway enforcement |
+| Limitations | Disabled for production; a valid explicit role is required and no administrator default exists |
 
-#### 4.1.2 Production Authentication (Migration Plan)
+#### 4.1.2 Production Authentication
 
 | Aspect | Implementation |
 |---|---|
 | Mechanism | OpenID Connect (OIDC) |
-| Identity provider | External OIDC provider (e.g., Keycloak, Azure AD, Okta) |
+| Identity provider | Single-tenant Microsoft Entra ID |
 | Token type | JWT (JSON Web Token) with RS256 signature |
 | Token lifetime | Access token: 15 minutes; Refresh token: 8 hours |
-| Claims mapping | `sub` → user ID; `tenant_id` → tenant; `role` → platform role |
+| Claims mapping | `oid` → user ID; `tid` → configured tenant; application `roles` → platform role |
 | MFA requirement | Required for `senior_analyst` and `admin` roles |
 | Session management | Stateless JWT validation; token revocation via short lifetimes + blocklist |
 
-**Migration timeline:**
-
-| Phase | Description | Target Date |
-|---|---|---|
-| Phase 1 | OIDC provider deployment and configuration | Q2 2026 |
-| Phase 2 | Service integration with JWT validation middleware | Q2 2026 |
-| Phase 3 | Parallel running (header + OIDC) with feature flag | Q3 2026 |
-| Phase 4 | Header-based authentication removal | Q3 2026 |
-| Phase 5 | MFA enforcement for elevated roles | Q3 2026 |
+The application rejects cross-tenant, application-only, invalid-audience, and
+invalid-issuer tokens. Production startup fails unless Entra mode is selected.
+MFA and Conditional Access enforcement remain identity-provider controls.
 
 ### 4.2 Inter-Service Authentication
 

@@ -4,7 +4,7 @@
 **Target:** Controlled pilot
 **Primary flow:** Microsoft Sentinel alert → ALUSKORT investigation → analyst approval → Sentinel incident comment/tag
 
-## Progress ledger (2026-08-20)
+## Progress ledger (updated 2026-09-09)
 
 - [x] CI runs on `master`; the complete test suite and measured coverage gate pass.
 - [x] Docker Compose and Terraform formatting are validated in CI.
@@ -22,8 +22,20 @@
 - [x] Persist analyst approval and actor evidence transactionally.
 - [x] Implement idempotent Sentinel incident comment/tag write-back with retry,
   crash recovery, and a dead-letter state.
-- [ ] Remove demo fallbacks from non-core dashboard administration pages.
+- [x] Remove synthetic fallback values from the CISO executive metrics path.
+- [ ] Remove demo fallbacks from the remaining non-core dashboard administration pages.
 - [ ] Run containerised synthetic-alert and outage scenarios, followed by the soak.
+
+### Validation log — 2026-09-09
+
+- Full Python suite: 2,150 passed.
+- Docker Compose configuration and Terraform formatting: valid.
+- Local Postgres, Kafka/Redpanda, Redis, Qdrant, Neo4j, and MinIO: healthy.
+- Persistent-database migration gap found and repaired with an ordered,
+  checksum-tracked migration job; Sentinel checkpoint, approval, write-back
+  outbox, and current audit partition tables verified locally.
+- Live Sentinel alert validation is waiting on the pilot `.env`, Azure identity,
+  Sentinel workspace details, dashboard app registration, and LLM API key.
 
 ## Safety boundary
 

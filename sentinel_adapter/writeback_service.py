@@ -101,6 +101,10 @@ async def lifespan(_: FastAPI):
     runtime.db = PostgresClient(dsn=config.postgres_dsn, min_size=1, max_size=5)
     await runtime.db.connect()
     runtime.credential = DefaultAzureCredential()
+    await asyncio.to_thread(
+        runtime.credential.get_token,
+        SentinelIncidentClient.ARM_SCOPE,
+    )
     runtime.outbox = PostgresWritebackOutbox(runtime.db)
     runtime.client = SentinelIncidentClient(runtime.credential)
     runtime.task = asyncio.create_task(

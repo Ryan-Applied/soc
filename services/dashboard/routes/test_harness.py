@@ -11,6 +11,7 @@ techniques, decision chain with timestamps, recommended actions, and scoring.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import uuid
@@ -524,6 +525,9 @@ class FireRequest(BaseModel):
     scenario: str = "all"
     count: int = 5
     tenant_id: str = "default"
+    write_ctem: bool = False
+    write_iocs: bool = False
+    write_cti: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -581,6 +585,7 @@ async def fire_test_alerts(req: FireRequest) -> dict[str, Any]:
         pool = list(_SCENARIOS)
 
     created = []
+    related_write_errors: list[str] = []
     now = datetime.now(timezone.utc)
 
     for i in range(min(req.count, 50)):  # Cap at 50
@@ -634,6 +639,30 @@ async def fire_test_alerts(req: FireRequest) -> dict[str, Any]:
             alert_ts,
         )
 
+        # Write CTEM exposures into the real ctem_exposures table
+        if req.write_ctem:
+            related_write_errors.extend(
+                await _write_ctem_to_db(db, scenario, req.tenant_id, alert_ts)
+            )
+
+        # Write IOC intelligence into threat_intel_iocs
+        if req.write_iocs:
+            related_write_errors.extend(await _write_iocs_to_db(db, scenario, alert_ts))
+
+        # Write closed investigations into incident_memory as CTI
+        if req.write_cti and state == "closed":
+            related_write_errors.extend(
+                await _write_cti_to_db(
+                    db,
+                    scenario,
+                    inv_id,
+                    alert_id,
+                    req.tenant_id,
+                    alert_ts,
+                    classification,
+                )
+            )
+
         created.append({
             "investigation_id": inv_id,
             "alert_id": alert_id,
@@ -643,20 +672,36 @@ async def fire_test_alerts(req: FireRequest) -> dict[str, Any]:
             "tag": scenario["tag"],
         })
 
-    return {"created": created, "count": len(created)}
+    return {
+        "status": "partial" if related_write_errors else "created",
+        "created": created,
+        "count": len(created),
+        "related_write_errors": related_write_errors,
+    }
 
 
 @router.post("/api/test-harness/clear")
 async def clear_test_data() -> dict[str, Any]:
-    """Remove all test-generated investigations."""
+    """Remove all test-generated investigations, CTEM, IOC, and CTI records."""
     db = get_db()
     if db is None:
         raise HTTPException(503, "Database not available")
 
-    result = await db.execute(
-        "DELETE FROM investigation_state WHERE alert_id LIKE 'TEST-%'",
-    )
-    return {"status": "cleared", "result": str(result)}
+    results = {}
+    for table, condition in [
+        ("investigation_state", "alert_id LIKE 'TEST-%'"),
+        ("ctem_exposures", "exposure_key LIKE 'TEST-%'"),
+        ("threat_intel_iocs", "doc_id LIKE 'TEST-%'"),
+        ("incident_memory", "doc_id LIKE 'TEST-%'"),
+    ]:
+        try:
+            r = await db.execute(f"DELETE FROM {table} WHERE {condition}")
+            results[table] = str(r)
+        except Exception as exc:
+            results[table] = f"error: {exc}"
+
+    status = "partial" if any(str(value).startswith("error:") for value in results.values()) else "cleared"
+    return {"status": status, "tables": results}
 
 
 # ---------------------------------------------------------------------------
@@ -724,6 +769,9 @@ def _build_graph_state(
             "techniques": scenario["techniques"],
             "source": "test_harness",
             "timestamp": alert_ts.isoformat(),
+            "raw_alert": _build_raw_alert(scenario, alert_id, alert_ts),
+            "cti_context": _build_cti_context(scenario),
+            "network_context": _build_network_context(scenario),
         },
     }
 
@@ -1109,6 +1157,409 @@ def _build_playbook_matches(
                 "actions": pb["actions"],
             })
     return matches
+
+
+# ---------------------------------------------------------------------------
+# Raw alert body — realistic SIEM event payloads per scenario tag
+# ---------------------------------------------------------------------------
+
+_RAW_ALERT_TEMPLATES: dict[str, dict[str, Any]] = {
+    "apt": {
+        "ProductName": "Microsoft Sentinel",
+        "AlertType": "ThreatIntelligence",
+        "AlertSeverity": "High",
+        "ExtendedProperties": {
+            "Alert generation status": "Full alert",
+            "Tactics": "CommandAndControl,Execution",
+            "ProcessingEndTime": None,  # filled dynamically
+        },
+    },
+    "insider": {
+        "ProductName": "Microsoft Sentinel",
+        "AlertType": "AnomalousActivity",
+        "AlertSeverity": "Medium",
+        "ExtendedProperties": {
+            "Alert generation status": "Full alert",
+            "Tactics": "Collection,Exfiltration",
+        },
+    },
+    "malware": {
+        "ProductName": "CrowdStrike Falcon",
+        "AlertType": "MalwareDetection",
+        "AlertSeverity": "Critical",
+        "ExtendedProperties": {
+            "Technique": "T1059.001",
+            "FileName": "beacon.dll",
+            "SHA256": "a3f5b2c1d4e6f7890abcdef1234567890abcdef1234567890abcdef12345678",
+        },
+    },
+    "cloud": {
+        "ProductName": "AWS Security Hub / Azure Defender",
+        "AlertType": "CloudSecurityAlert",
+        "AlertSeverity": "High",
+        "ExtendedProperties": {
+            "ResourceType": "IAM/CloudTrail",
+            "Region": "us-east-1",
+        },
+    },
+    "ot": {
+        "ProductName": "Claroty / Dragos",
+        "AlertType": "OTSecurityAlert",
+        "AlertSeverity": "Critical",
+        "ExtendedProperties": {
+            "Protocol": "Modbus/TCP",
+            "Zone": "Zone1_SafetyInstrumentedSystem",
+        },
+    },
+}
+
+_EVENT_ID_MAP: dict[str, list[int]] = {
+    "apt":    [4624, 4688, 4698, 4769, 7045, 4625],
+    "insider": [4663, 4661, 4670, 4624, 4719],
+    "malware": [4688, 4657, 4104, 1116, 1117],
+    "cloud":   [4648, 4625, 4719, 4720, 4732],
+    "ot":      [1100, 2001, 3001, 4001],
+}
+
+
+def _build_raw_alert(scenario: dict[str, Any], alert_id: str, alert_ts: datetime) -> dict[str, Any]:
+    """Build a realistic raw SIEM/EDR alert payload."""
+    tag = scenario["tag"]
+    tmpl = dict(_RAW_ALERT_TEMPLATES.get(tag, _RAW_ALERT_TEMPLATES["apt"]))
+    ents = scenario["entities"]
+    hosts = [e for e in ents if e.get("Type") == "host"]
+    accounts = [e for e in ents if e.get("Type") == "account"]
+    ips = [e for e in ents if e.get("Type") == "ip"]
+
+    event_ids = _EVENT_ID_MAP.get(tag, [4688, 4624])
+    ext = dict(tmpl.get("ExtendedProperties", {}))
+    ext["ProcessingEndTime"] = (alert_ts + timedelta(seconds=random.randint(2, 8))).isoformat()
+
+    raw: dict[str, Any] = {
+        "AlertId": alert_id,
+        "AlertDisplayName": scenario["title"],
+        "Description": scenario["description"],
+        "ProductName": tmpl["ProductName"],
+        "AlertType": tmpl["AlertType"],
+        "AlertSeverity": tmpl["AlertSeverity"],
+        "StartTime": (alert_ts - timedelta(minutes=random.randint(1, 10))).isoformat(),
+        "EndTime": alert_ts.isoformat(),
+        "ProcessingEndTime": ext.pop("ProcessingEndTime"),
+        "ExtendedProperties": ext,
+        "Entities": ents,
+        "Events": [
+            {
+                "EventId": random.choice(event_ids),
+                "TimeGenerated": (alert_ts - timedelta(seconds=random.randint(10, 120))).isoformat(),
+                "Computer": hosts[0]["HostName"] if hosts else "UNKNOWN",
+                "Account": f"{accounts[0]['Name']}@{accounts[0].get('UPNSuffix', 'contoso.com')}" if accounts else "",
+                "IpAddress": ips[0]["Address"] if ips else "",
+                "CommandLine": next(
+                    (e.get("CommandLine", "") for e in ents if e.get("Type") == "process"), ""
+                ),
+                "Message": f"Sentinel/EDR event for alert: {scenario['title']}",
+            }
+            for _ in range(random.randint(2, 5))
+        ],
+        "MITREAttackTactics": scenario["tactics"],
+        "MITREAttackTechniques": scenario["techniques"],
+        "Confidence": round(random.uniform(0.75, 0.99), 2),
+        "ProviderName": tmpl["ProductName"].split()[0],
+    }
+    return raw
+
+
+# ---------------------------------------------------------------------------
+# CTI context — threat actor and campaign intel per scenario
+# ---------------------------------------------------------------------------
+
+_CTI_ACTORS: dict[str, dict[str, Any]] = {
+    "Cobalt Strike": {
+        "actor": "APT29 (Cozy Bear)",
+        "origin": "Russia",
+        "motivation": "Espionage",
+        "campaigns": ["SolarWinds (2020)", "MicrosoftExchange (2021)", "NATO Phishing (2023)"],
+        "ttps": ["T1071.001", "T1218.011", "T1027", "T1105"],
+        "confidence": "High",
+        "source": "MISP / US-CERT AA21-148A",
+    },
+    "Kerberoasting": {
+        "actor": "FIN7 / Carbanak",
+        "origin": "Ukraine/Russia",
+        "motivation": "Financial",
+        "campaigns": ["POS Malware Campaign (2022)", "BazarLoader (2023)"],
+        "ttps": ["T1558.003", "T1078", "T1053"],
+        "confidence": "Medium",
+        "source": "CrowdStrike Intelligence",
+    },
+    "Ransomware": {
+        "actor": "LockBit 3.0 Affiliates",
+        "origin": "Unknown",
+        "motivation": "Financial — Ransomware-as-a-Service",
+        "campaigns": ["LockBit 3.0 Global Campaign (2024)", "LockBit Green (2023)"],
+        "ttps": ["T1490", "T1059.003", "T1486", "T1070"],
+        "confidence": "High",
+        "source": "CISA Alert AA23-075A",
+    },
+    "Emotet": {
+        "actor": "TA542 (Mealybug)",
+        "origin": "Eastern Europe",
+        "motivation": "Financial — malware distribution",
+        "campaigns": ["Emotet Epoch5 (2024)", "QBot distribution (2023)"],
+        "ttps": ["T1566.001", "T1059.001", "T1055"],
+        "confidence": "High",
+        "source": "MISP Threat Intel / Proofpoint TA542",
+    },
+    "default": {
+        "actor": "Unknown Threat Actor",
+        "origin": "Unknown",
+        "motivation": "Unknown",
+        "campaigns": [],
+        "ttps": [],
+        "confidence": "Low",
+        "source": "Internal intelligence",
+    },
+}
+
+
+def _build_cti_context(scenario: dict[str, Any]) -> dict[str, Any]:
+    """Resolve threat actor CTI context for the scenario."""
+    title = scenario["title"]
+    actor_data = _CTI_ACTORS["default"]
+    for keyword, data in _CTI_ACTORS.items():
+        if keyword.lower() in title.lower():
+            actor_data = data
+            break
+    if actor_data is _CTI_ACTORS["default"] and scenario["tag"] == "malware":
+        actor_data = _CTI_ACTORS["Ransomware"]
+
+    iocs = scenario.get("ioc_matches", [])
+    related_ioc_count = len([i for i in iocs if i.get("confidence", 0) > 0.85])
+
+    return {
+        "threat_actor": actor_data["actor"],
+        "actor_origin": actor_data["origin"],
+        "motivation": actor_data["motivation"],
+        "known_campaigns": actor_data["campaigns"],
+        "matched_ttps": actor_data["ttps"] or scenario["techniques"][:3],
+        "intel_confidence": actor_data["confidence"],
+        "intel_source": actor_data["source"],
+        "high_confidence_ioc_matches": related_ioc_count,
+        "threat_level": "Critical" if scenario["severity"] == "critical" else "High",
+        "last_activity": f"{random.randint(1, 14)} days ago",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Network context — topology and asset criticality
+# ---------------------------------------------------------------------------
+
+def _build_network_context(scenario: dict[str, Any]) -> dict[str, Any]:
+    """Build network and asset context for the investigation."""
+    ents = scenario["entities"]
+    hosts = [e for e in ents if e.get("Type") == "host"]
+    ips = [e for e in ents if e.get("Type") == "ip"]
+    int_ips = [i for i in ips if i["Address"].startswith(("10.", "192.168.", "172."))]
+    ext_ips = [i for i in ips if not i["Address"].startswith(("10.", "192.168.", "172."))]
+
+    zone = "Zone1_OT" if scenario["tag"] == "ot" else "Zone3_Enterprise"
+    criticality = "Critical" if scenario["tag"] == "ot" else (
+        "High" if scenario["severity"] == "critical" else "Medium"
+    )
+
+    return {
+        "asset_zone": zone,
+        "asset_criticality": criticality,
+        "internal_ips": [i["Address"] for i in int_ips],
+        "external_ips": [i["Address"] for i in ext_ips],
+        "affected_hosts": [h["HostName"] for h in hosts],
+        "network_segment": "OT/ICS" if scenario["tag"] == "ot" else "Corporate",
+        "firewall_traversal": bool(ext_ips),
+        "lateral_movement_risk": scenario["tag"] in ("apt", "malware"),
+        "data_classification": "Restricted" if scenario["tag"] in ("insider", "cloud") else "Internal",
+    }
+
+
+# ---------------------------------------------------------------------------
+# DB writers — populate CTEM, IOC, and CTI tables with test data
+# ---------------------------------------------------------------------------
+
+
+def _exposure_key(prefix: str, title: str, asset: str) -> str:
+    """Deterministic but test-prefixed exposure key."""
+    raw = f"{prefix}:{title}:{asset}".encode()
+    return f"TEST-{hashlib.sha256(raw).hexdigest()[:12]}"
+
+
+async def _write_ctem_to_db(
+    db: Any, scenario: dict[str, Any], tenant_id: str, alert_ts: datetime
+) -> list[str]:
+    """Insert the scenario's CTEM exposures into the ctem_exposures table."""
+    errors: list[str] = []
+    exposures = scenario.get("ctem_exposures", [])
+    for exp in exposures:
+        sev = exp.get("severity", "medium").lower()
+        score_map = {"critical": 0.9, "high": 0.7, "medium": 0.5, "low": 0.2}
+        ctem_score = score_map.get(sev, 0.5)
+        ekey = _exposure_key("ctem", exp.get("title", ""), exp.get("asset", ""))
+        sla_days = {"critical": 3, "high": 7, "medium": 30, "low": 90}.get(sev, 30)
+        try:
+            await db.execute(
+                """
+                INSERT INTO ctem_exposures (
+                    exposure_key, ts, source_tool, title, description,
+                    severity, original_severity, asset_id, asset_type, asset_zone,
+                    exploitability_score, physical_consequence, ctem_score,
+                    atlas_technique, attack_technique, threat_model_ref,
+                    status, sla_deadline, remediation_guidance, evidence_url, tenant_id
+                ) VALUES (
+                    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21
+                )
+                ON CONFLICT (exposure_key) DO NOTHING
+                """,
+                ekey,
+                alert_ts,
+                exp.get("source", "TestHarness").lower().replace(" ", "_"),
+                exp.get("title", ""),
+                exp.get("description", ""),
+                sev,
+                sev.upper(),
+                exp.get("asset", "unknown"),
+                "host",
+                "Zone3_Enterprise" if scenario["tag"] != "ot" else "Zone1_EdgeInference",
+                ctem_score,
+                "data_loss" if scenario["tag"] in ("insider", "cloud") else "physical_damage" if scenario["tag"] == "ot" else "service_disruption",
+                ctem_score,
+                "",
+                scenario["techniques"][0] if scenario["techniques"] else "",
+                "",
+                "Open",
+                alert_ts + timedelta(days=sla_days),
+                exp.get("remediation", ""),
+                "",
+                tenant_id,
+            )
+        except Exception as exc:
+            errors.append(f"ctem:{ekey}: {exc}")
+    return errors
+
+
+async def _write_iocs_to_db(
+    db: Any, scenario: dict[str, Any], alert_ts: datetime
+) -> list[str]:
+    """Insert IOC matches into threat_intel_iocs."""
+    errors: list[str] = []
+    iocs = scenario.get("ioc_matches", [])
+    for ioc in iocs:
+        ioc_type = ioc.get("type", "unknown")
+        ioc_value = ioc.get("value", "")
+        if not ioc_value or ioc_type == "behaviour":
+            continue  # Behaviours aren't discrete IOCs
+
+        doc_id = f"TEST-{hashlib.sha256(f'{ioc_type}:{ioc_value}'.encode()).hexdigest()[:14]}"
+        confidence_int = int(ioc.get("confidence", 0.5) * 100)
+        source = ioc.get("source", "TestHarness")
+        tags = ioc.get("tags", [])
+        if not tags:
+            tags = [scenario["tag"], ioc.get("threat_type", "unknown")]
+
+        first_seen_str = ioc.get("first_seen")
+        first_seen = datetime.fromisoformat(first_seen_str).replace(tzinfo=timezone.utc) if first_seen_str else alert_ts - timedelta(days=random.randint(1, 90))
+
+        try:
+            await db.execute(
+                """
+                INSERT INTO threat_intel_iocs (
+                    doc_id, indicator_type, indicator_value, confidence,
+                    severity, associated_campaigns, associated_groups,
+                    mitre_techniques, first_seen, last_seen,
+                    sources, context, expiry, tags
+                ) VALUES (
+                    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14
+                )
+                ON CONFLICT (doc_id) DO UPDATE
+                    SET last_seen = EXCLUDED.last_seen,
+                        confidence = GREATEST(threat_intel_iocs.confidence, EXCLUDED.confidence)
+                """,
+                doc_id,
+                ioc_type,
+                ioc_value,
+                confidence_int,
+                "high" if confidence_int >= 85 else "medium",
+                [],
+                [],
+                scenario.get("techniques", [])[:3],
+                first_seen,
+                alert_ts,
+                [source],
+                ioc.get("note", ""),
+                alert_ts + timedelta(days=90),
+                tags,
+            )
+        except Exception as exc:
+            errors.append(f"ioc:{ioc_type}:{ioc_value}: {exc}")
+    return errors
+
+
+async def _write_cti_to_db(
+    db: Any,
+    scenario: dict[str, Any],
+    inv_id: str,
+    alert_id: str,
+    tenant_id: str,
+    alert_ts: datetime,
+    classification: str,
+) -> list[str]:
+    """Write closed investigation into incident_memory as CTI historical record."""
+    doc_id = f"TEST-{inv_id}"
+    ents = scenario["entities"]
+    cti_ctx = _build_cti_context(scenario)
+
+    summary = (
+        f"{scenario['title']}. "
+        f"Threat actor: {cti_ctx['threat_actor']} ({cti_ctx['actor_origin']}). "
+        f"Motivation: {cti_ctx['motivation']}. "
+        f"MITRE tactics: {', '.join(scenario['tactics'])}. "
+        f"Techniques: {', '.join(scenario['techniques'][:3])}. "
+        f"Classification: {classification or 'true_positive'}."
+    )
+
+    errors: list[str] = []
+    try:
+        await db.execute(
+            """
+            INSERT INTO incident_memory (
+                doc_id, incident_id, alert_ids, timestamp, tenant_id,
+                initial_classification, final_classification,
+                alert_product, alert_name, alert_source, severity,
+                entities, mitre_techniques, investigation_summary,
+                decision_chain, outcome, lessons_learned
+            ) VALUES (
+                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17
+            )
+            ON CONFLICT (doc_id) DO NOTHING
+            """,
+            doc_id,
+            inv_id,
+            [alert_id],
+            alert_ts,
+            tenant_id,
+            classification or "true_positive",
+            classification or "true_positive",
+            "TestHarness",
+            scenario["title"],
+            "test_harness",
+            scenario["severity"],
+            json.dumps({"entities": ents, "count": len(ents)}),
+            scenario.get("techniques", []),
+            summary,
+            json.dumps({"steps": len(scenario.get("tactics", []))}),
+            "closed",
+            f"Scenario tag: {scenario['tag']}. Threat actor: {cti_ctx['threat_actor']}.",
+        )
+    except Exception as exc:
+        errors.append(f"cti:{doc_id}: {exc}")
+    return errors
 
 
 def _build_ueba_context(

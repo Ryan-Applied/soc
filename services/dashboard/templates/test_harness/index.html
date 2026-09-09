@@ -54,6 +54,12 @@
             </div>
         </div>
 
+        <label class="inline-flex items-center gap-2 mb-4 text-sm text-ac-gray4">
+            <input id="persist-related" type="checkbox"
+                   class="rounded border-ac-borderLight bg-ac-border">
+            Also populate TEST-prefixed CTEM, IOC, and incident-memory records
+        </label>
+
         <!-- Result Banner -->
         <div id="fire-result" class="hidden rounded-ac border p-3 text-sm"></div>
     </div>
@@ -178,6 +184,7 @@
         btn.innerHTML = '<span class="animate-pulse">Firing...</span>';
 
         try {
+            const persistRelated = document.getElementById('persist-related').checked;
             const resp = await fetch('/api/test-harness/fire', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json', 'X-User-Role': 'admin'},
@@ -185,17 +192,26 @@
                     scenario: document.getElementById('fire-scenario').value,
                     count: parseInt(document.getElementById('fire-count').value) || 5,
                     tenant_id: document.getElementById('fire-tenant').value || 'default',
+                    write_ctem: persistRelated,
+                    write_iocs: persistRelated,
+                    write_cti: persistRelated,
                 }),
             });
             const data = await resp.json();
             if (resp.ok) {
-                result.className = 'rounded-ac border border-ac-green/30 bg-ac-green/10 p-3 text-sm text-ac-green';
+                const partial = data.status === 'partial';
+                result.className = partial
+                    ? 'rounded-ac border border-ac-orange/30 bg-ac-orange/10 p-3 text-sm text-ac-orange'
+                    : 'rounded-ac border border-ac-green/30 bg-ac-green/10 p-3 text-sm text-ac-green';
                 const sevCounts = {};
                 data.created.forEach(a => { sevCounts[a.severity] = (sevCounts[a.severity] || 0) + 1; });
                 const sevStr = Object.entries(sevCounts).map(([k, v]) => `${v} ${k}`).join(', ');
-                result.innerHTML = `<strong>${data.count} alerts fired.</strong> ${sevStr}. <a href="/investigations" class="underline">View Investigations &rarr;</a>`;
+                const warning = partial
+                    ? ` ${data.related_write_errors.length} related-data write error(s); inspect the API response or service logs.`
+                    : '';
+                result.innerHTML = `<strong>${data.count} alerts fired.</strong> ${sevStr}.${warning} <a href="/investigations" class="underline">View Investigations &rarr;</a>`;
                 result.classList.remove('hidden');
-                setTimeout(() => window.location.reload(), 1500);
+                if (!partial) setTimeout(() => window.location.reload(), 1500);
             } else {
                 result.className = 'rounded-ac border border-ac-red/30 bg-ac-red/10 p-3 text-sm text-ac-red';
                 result.textContent = 'Error: ' + (data.detail || JSON.stringify(data));

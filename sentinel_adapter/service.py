@@ -131,6 +131,16 @@ async def ready() -> dict[str, str | None]:
         raise HTTPException(status_code=503, detail="Sentinel poller is not running")
     if runtime.db is None or not await runtime.db.health_check():
         raise HTTPException(status_code=503, detail="Postgres is unavailable")
+    if connector.last_error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Sentinel polling is failing: {connector.last_error}",
+        )
+    if connector.last_success_at is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Sentinel poller has not completed its initial query",
+        )
     return {
         "status": "ready",
         "last_success_at": connector.last_success_at,

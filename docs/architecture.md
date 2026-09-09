@@ -1608,9 +1608,9 @@ FULL CAPABILITY
 name: CI
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 jobs:
   test:
@@ -1656,7 +1656,7 @@ jobs:
       - uses: docker/build-push-action@v5
         with:
           context: ./services/${{ matrix.service }}
-          push: ${{ github.ref == 'refs/heads/main' }}
+          push: ${{ github.ref == 'refs/heads/master' }}
           tags: ghcr.io/aluskort/${{ matrix.service }}:${{ github.sha }}
 ```
 

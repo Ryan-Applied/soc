@@ -3,7 +3,7 @@
 -- FR-CSM-004: Captures structured analyst verdicts on investigation outcomes.
 -- ============================================================
 
-CREATE TABLE analyst_feedback (
+CREATE TABLE IF NOT EXISTS analyst_feedback (
     id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     investigation_id            TEXT NOT NULL REFERENCES investigation_state(investigation_id),
     analyst_id                  TEXT NOT NULL,
@@ -15,8 +15,8 @@ CREATE TABLE analyst_feedback (
     submitted_at                TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_feedback_investigation ON analyst_feedback(investigation_id);
-CREATE INDEX idx_feedback_submitted     ON analyst_feedback(submitted_at);
+CREATE INDEX IF NOT EXISTS idx_feedback_investigation ON analyst_feedback(investigation_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_submitted     ON analyst_feedback(submitted_at);
 
 -- ============================================================
 -- ATLAS detections persistence table

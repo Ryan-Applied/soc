@@ -329,7 +329,8 @@ pytest tests/services/dashboard/test_auth.py
 ```
 
 Validates:
-- Role extraction from `X-User-Role` header
+- Microsoft Entra token validation and application-role mapping
+- Explicit local-development role-header authentication
 - Role hierarchy enforcement (admin > senior_analyst > analyst)
 - Protected route access control
 - Invalid role rejection

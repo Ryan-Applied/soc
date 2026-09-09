@@ -77,6 +77,18 @@ class TestDataPersistence:
 
 
 class TestAluskortServices:
+    def test_migration_job_runs_for_persistent_databases(self):
+        data = _load_compose()
+        migrate = data["services"]["migrate"]
+        assert migrate["build"]["dockerfile"] == "Dockerfile.migrate"
+        assert migrate["command"] == ["python", "-m", "infra.scripts.apply_migrations"]
+        assert migrate["depends_on"]["postgres"]["condition"] == "service_healthy"
+        for service in ["dashboard", "sentinel-adapter", "sentinel-writeback"]:
+            assert (
+                data["services"][service]["depends_on"]["migrate"]["condition"]
+                == "service_completed_successfully"
+            )
+
     def test_entity_parser_depends_on_infra(self):
         data = _load_compose()
         svc = data["services"]["entity-parser"]

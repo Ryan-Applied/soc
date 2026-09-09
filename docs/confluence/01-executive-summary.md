@@ -67,6 +67,6 @@ The platform is purpose-built for hybrid IT/OT environments where both tradition
 | Sprint 1 | Core pipeline (Entity Parser, Orchestrator, Context Gateway, LLM Router) | Complete |
 | Sprint 2 | CTEM Normaliser, ATLAS Detection, Batch Scheduler, Audit Service | Complete |
 | Sprint 3 | SIEM Adapters (Sentinel, Elastic, Splunk), Analyst Dashboard | Complete |
-| Sprint 4 | Adversarial review hardening, production readiness | Complete |
+| Sprint 4 | Adversarial review hardening, controlled-pilot readiness | In validation |
 
-All epics delivered. Platform is in active use with test harness validation across 15 synthetic scenarios spanning APT, ransomware, insider threat, cloud compromise, and adversarial AI attack categories.
+Core implementation is complete through the analyst-approved Sentinel write-back path. Controlled-pilot validation, outage exercises, and the 48-hour soak remain before production sign-off. The local test harness provides synthetic scenarios spanning APT, ransomware, insider threat, cloud compromise, and adversarial AI attack categories; it is disabled in production.

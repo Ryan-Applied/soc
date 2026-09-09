@@ -90,6 +90,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS enforce_audit_immutability ON audit_records;
 CREATE TRIGGER enforce_audit_immutability
     BEFORE UPDATE OR DELETE ON audit_records
     FOR EACH ROW EXECUTE FUNCTION audit_immutable_guard();

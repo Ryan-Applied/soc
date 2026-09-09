@@ -15,10 +15,10 @@ CREATE TABLE IF NOT EXISTS ti_report_chunks (
     UNIQUE (report_id, chunk_index)
 );
 
-CREATE INDEX idx_ti_chunks_report
+CREATE INDEX IF NOT EXISTS idx_ti_chunks_report
     ON ti_report_chunks (report_id);
 
 -- Partial index for the batch job to quickly find chunks that still need embedding.
-CREATE INDEX idx_ti_chunks_not_embedded
+CREATE INDEX IF NOT EXISTS idx_ti_chunks_not_embedded
     ON ti_report_chunks (embedded_at)
     WHERE embedded_at IS NULL;

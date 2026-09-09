@@ -60,3 +60,8 @@ coverage.xml
 # Logs
 *.log
 logs/
+
+# Generated documentation artifacts (Markdown remains the source of truth)
+*.pdf
+docs/confluence/*.html
+docs/confluence/Archive.zip

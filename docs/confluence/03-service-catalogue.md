@@ -301,7 +301,7 @@ None directly consumed or produced.
 |----------|-------|
 | **Package** | `services/dashboard/` |
 | **Entry Point** | `uvicorn services.dashboard.app:app --host 0.0.0.0 --port 8080` |
-| **Description** | Analyst Investigation Dashboard. FastAPI + HTMX + Jinja2 web UI providing investigation list, investigation detail, approvals queue, CTEM dashboard, CTI dashboard, Adversarial AI monitoring, SIEM connector management, settings, and test harness. RBAC via X-User-Role header. |
+| **Description** | Analyst Investigation Dashboard. FastAPI + HTMX + Jinja2 web UI providing investigation list, investigation detail, approvals queue, CTEM dashboard, CTI dashboard, Adversarial AI monitoring, SIEM connector management, settings, and a non-production test harness. Production RBAC uses Microsoft Entra access tokens; explicit role headers are limited to local development. |
 | **Owner** | Platform Team |
 
 ### Dependencies

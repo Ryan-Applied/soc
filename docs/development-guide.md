@@ -125,13 +125,13 @@ python -m pytest tests/test_llm_router/test_router.py::test_route_ioc_extraction
 
 **GitHub Actions** (`.github/workflows/ci-cd.yml`):
 
-### CI (on push/PR to `main`)
+### CI (on push/PR to `master`)
 1. Spin up PostgreSQL 16 + Redis 7 service containers
 2. Install Python 3.12 + `pip install -e ".[dev]" pytest-cov`
 3. Run `pytest tests/ --cov=shared --cov-fail-under=90`
 4. Upload coverage artifact
 
-### CD (on push to `main` only, after CI passes)
+### CD (on push to `master` only, after CI passes)
 1. Matrix build: 8 services in parallel
 2. Build from `./Dockerfile` with `SERVICE` build arg
 3. Push to GHCR: `ghcr.io/<owner>/aluskort/<service>:<sha>` + `:latest`

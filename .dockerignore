@@ -1,5 +1,6 @@
 .git
 .pytest_cache
+.venv
 __pycache__
 *.pyc
 *.egg-info
@@ -9,3 +10,6 @@ tests/
 docs/
 .claude/
 *.md
+*.pdf
+*.zip
+docs/confluence/*.html

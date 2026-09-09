@@ -11,7 +11,7 @@
 
 **Cloud-Neutral Security Reasoning Control Plane** by [Applied Computing Technologies](https://github.com/scs-labrat)
 
-ALUSKORT is an autonomous Security Operations Center (SOC) platform that uses LLM-driven investigation graphs to triage, enrich, and resolve security alerts with minimal analyst intervention. It reduces Mean Time to Detect (MTTD) to under 30 seconds and automates 80%+ of investigations end-to-end.
+ALUSKORT is an autonomous Security Operations Center (SOC) platform that uses LLM-driven investigation graphs to triage, enrich, and resolve security alerts with minimal analyst intervention. The controlled pilot targets Mean Time to Detect (MTTD) under 30 seconds and more than 80% end-to-end investigation automation; these targets require live pilot and soak validation.
 
 ---
 
@@ -246,12 +246,15 @@ terraform apply -var-file=terraform.tfvars
 
 ## Database Migrations
 
-Migrations run automatically on first `docker-compose up` via the Postgres init directory. For production:
+Migrations run on first database initialisation and through the idempotent
+migration job for persistent databases:
 
 ```bash
-# Migrations are in infra/migrations/ (001-019)
-# Applied in order by filename during container init
+# Migrations are in infra/migrations/ (001-020)
 ls infra/migrations/
+
+# Apply outstanding migrations in filename order
+python -m infra.scripts.apply_migrations
 ```
 
 | Migration | Purpose |
@@ -270,6 +273,7 @@ ls infra/migrations/
 | 014–017 | TI chunks, analyst feedback, tenant spend caps, organisation assets |
 | 018 | Durable Sentinel polling checkpoints and deduplication |
 | 019 | Durable analyst approvals and Sentinel write-back outbox |
+| 020 | Default audit partition for current and future event timestamps |
 
 ## CI/CD
 

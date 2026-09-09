@@ -31,7 +31,7 @@
 - **Containers:** testcontainers-python (Kafka, PostgreSQL, Redis, Qdrant, Neo4j)
 - **LLM mocking:** `unittest.mock.AsyncMock` patching `anthropic.AsyncAnthropic.messages.create`
 - **Fixtures:** JSON files under `tests/fixtures/`
-- **CI:** GitHub Actions (all tests on every merge to `main`)
+- **CI:** GitHub Actions (all tests on every push or pull request to `master`)
 
 ### 1.3 Mock Strategy for Anthropic API
 

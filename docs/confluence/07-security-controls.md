@@ -33,12 +33,15 @@ Service-to-service communication uses mutual TLS (`shared/auth/mtls.py`):
 - The receiving service validates the client certificate chain
 - Used between Orchestrator, Context Gateway, LLM Router, and Audit Service
 
-### Dashboard Authentication (MVP)
+### Dashboard Authentication
 
-The dashboard currently uses header-based role extraction (`X-User-Role`) for MVP:
-- Production deployment will use OIDC/SAML token validation
-- When no header is present, defaults to `admin` (MVP mode only)
-- Public paths exempt from auth: `/health`, `/docs`, `/openapi.json`, `/redoc`
+Production uses single-tenant Microsoft Entra access-token validation. Tokens
+must have the configured audience, tenant, issuer, user object ID, and an
+ALUSKORT application role. Missing or invalid tokens are rejected; there is no
+default administrator. Explicit `X-User-Role`/`X-User-Id` headers are supported
+only in local-development mode. Public paths exempt from authentication are
+`/health`, `/docs`, `/openapi.json`, and `/redoc`. The test harness is disabled
+in production and requires an explicit feature flag in development.
 
 ---
 
